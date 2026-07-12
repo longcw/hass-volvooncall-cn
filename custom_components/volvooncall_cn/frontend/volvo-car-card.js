@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.0.2";
+const CARD_VERSION = "2.0.3";
 
 const ENTITY_DEFINITIONS = {
   lock: ["lock", "lock"],
@@ -27,7 +27,7 @@ const ENTITY_DEFINITIONS = {
   charging_time: ["sensor", "estimated_charging_time"],
   odometer: ["sensor", "odometer"],
   tm_distance: ["sensor", "trip_meter_tm"],
-  tm_fuel_consumption: ["sensor", "tm_fuel_consumption"],
+  tm_fuel_consumption: ["sensor", "fuel_average_consumption_liters_per_100_km"],
   tm_energy_consumption: ["sensor", "tm_energy_consumption"],
   tm_average_speed: ["sensor", "avg_speed_tm"],
   ta_distance: ["sensor", "trip_meter_at"],
@@ -501,7 +501,13 @@ class VolvoCarCard extends HTMLElement {
   _control(control) {
     const [key, kind, label, icon] = control;
     const stateObj = this._state(key);
-    const available = this._isAvailable(key);
+    // Button entities sit at state "unknown" until first pressed, so gating on
+    // _isAvailable (which rejects "unknown") would disable them forever. A
+    // button is pressable as long as its entity exists and isn't unavailable.
+    const available =
+      kind === "button"
+        ? Boolean(stateObj) && stateObj.state !== "unavailable"
+        : this._isAvailable(key);
     const active =
       kind === "lock" ? stateObj?.state === "locked" : stateObj?.state === "on";
     const dynamicLabel =
