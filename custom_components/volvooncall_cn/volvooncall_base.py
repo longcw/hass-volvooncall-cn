@@ -307,7 +307,10 @@ def sign_request(url, method, body):
         'body': body,
         'uri': parsed_url.path,
         'host': "apigateway.digitalvolvo.com",
-        'query': {}
+        # Huawei API Gateway signs the canonical query string, so query params
+        # (e.g. getPileList's ?seriesCode=&vin=) MUST be included or the gateway
+        # returns 401. Empty for query-less endpoints, so existing calls are unchanged.
+        'query': dict(urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True))
     }
     key = "204114990"
     secret = "bjGqb3TvEEZ8W8QhoyhEH4IenwCnc4JQ"
