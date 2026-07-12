@@ -210,7 +210,12 @@ class VolvoCoordinator(DataUpdateCoordinator):
                 vehicles = []
                 store_datas = []
 
-                for vin, vehicleInfos in vinVehicleMaps.items():
+                # Iterate VINs in a stable, deterministic order. Entities bind to
+                # a vehicle by list index (coordinator.data[idx]); the API does not
+                # guarantee a stable vehicle order between polls, so without this
+                # sort a reordered response swaps every value between vehicles
+                # (e.g. the XC90's data showing up on the XC60 and vice versa).
+                for vin, vehicleInfos in sorted(vinVehicleMaps.items()):
                     modelYear = int(vehicleInfos.get("modelYear", 2020))
                     isAaos = modelYear >= 2022
                     vehicle = Vehicle(vin, self.volvo_api, isAaos)
