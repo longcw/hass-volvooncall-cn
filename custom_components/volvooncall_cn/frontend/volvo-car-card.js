@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.0.5";
+const CARD_VERSION = "2.0.6";
 
 const ENTITY_DEFINITIONS = {
   lock: ["lock", "lock"],
@@ -73,6 +73,7 @@ const LABELS = {
   image: "车辆图片 URL（可选，仅支持 /local/... 或 HTTPS）",
   show_controls: "显示远程控制",
   show_statistics: "显示行程统计",
+  show_electric: "显示电动信息（混动/纯电）",
 };
 
 const MODEL_LABELS = {
@@ -105,6 +106,7 @@ class VolvoCarCard extends HTMLElement {
           },
         },
         { name: "image", selector: { text: {} } },
+        { name: "show_electric", selector: { boolean: {} } },
         { name: "show_controls", selector: { boolean: {} } },
         { name: "show_statistics", selector: { boolean: {} } },
       ],
@@ -117,6 +119,7 @@ class VolvoCarCard extends HTMLElement {
       vin: "",
       name: "S90 T8",
       model: "s90_t8",
+      show_electric: true,
       show_controls: true,
       show_statistics: true,
     };
@@ -126,6 +129,7 @@ class VolvoCarCard extends HTMLElement {
     this._config = {
       name: "S90 T8",
       model: "s90_t8",
+      show_electric: true,
       show_controls: true,
       show_statistics: true,
       entities: {},
@@ -274,6 +278,9 @@ class VolvoCarCard extends HTMLElement {
     const isOnline = !["disconnected", "offline", "false"].includes(connection);
     const charging = this._isCharging();
     const imageUrl = this._imageUrl();
+    // Hide EV-only tiles (battery, electric range, charging, energy use) for
+    // non-hybrid/fuel cars such as the XC60.
+    const electric = this._config.show_electric !== false;
 
     this.shadowRoot.innerHTML = `${this._styles()}
       <ha-card>
@@ -299,16 +306,16 @@ class VolvoCarCard extends HTMLElement {
           </div>
         </div>
 
-        <div class="range-band">
-          ${this._rangeTile("electric_range", "纯电续航", "mdi:lightning-bolt", "electric")}
+        <div class="range-band${electric ? "" : " single"}">
+          ${electric ? this._rangeTile("electric_range", "纯电续航", "mdi:lightning-bolt", "electric") : ""}
           ${this._rangeTile("fuel_range", "燃油续航", "mdi:gas-station", "fuel")}
         </div>
 
-        <div class="energy-grid">
-          ${this._levelTile("battery", "动力电池", battery, "%", "mdi:battery-high")}
+        <div class="energy-grid${electric ? "" : " fuel-only"}">
+          ${electric ? this._levelTile("battery", "动力电池", battery, "%", "mdi:battery-high") : ""}
           ${this._levelTile("fuel", "燃油余量", fuel, "L", "mdi:fuel")}
-          ${this._metricTile("charging_power", "充电功率", "mdi:ev-station")}
-          ${this._metricTile("charging_time", "预计充满", "mdi:timer-outline")}
+          ${electric ? this._metricTile("charging_power", "充电功率", "mdi:ev-station") : ""}
+          ${electric ? this._metricTile("charging_time", "预计充满", "mdi:timer-outline") : ""}
         </div>
 
         <div class="vehicle-area">
@@ -343,8 +350,8 @@ class VolvoCarCard extends HTMLElement {
           </div>
           <div class="state-panel">
             ${this._stateRow("lock", "车辆锁", isLocked ? "已锁定" : "未锁定", isLocked ? "ok" : "warn")}
-            ${this._stateRow("charging_status", "充电状态", this._displayState("charging_status"), charging ? "charge" : "")}
-            ${this._stateRow("full_charge_range", "最近满电续航", this._displayState("full_charge_range"), "charge")}
+            ${electric ? this._stateRow("charging_status", "充电状态", this._displayState("charging_status"), charging ? "charge" : "") : ""}
+            ${electric ? this._stateRow("full_charge_range", "最近满电续航", this._displayState("full_charge_range"), "charge") : ""}
             ${this._stateRow("engine", "发动机", this._isOn("engine") ? "运行中" : "关闭", this._isOn("engine") ? "warn" : "")}
             <div class="open-list">
               <span>开口状态</span>
@@ -374,7 +381,7 @@ class VolvoCarCard extends HTMLElement {
                     ["tm_distance", "里程"],
                     ["tm_average_speed", "均速"],
                     ["tm_fuel_consumption", "油耗"],
-                    ["tm_energy_consumption", "电耗"],
+                    ...(electric ? [["tm_energy_consumption", "电耗"]] : []),
                   ])}
                   ${this._tripBlock("TA", [
                     ["ta_distance", "里程"],
@@ -709,6 +716,8 @@ class VolvoCarCard extends HTMLElement {
         background: var(--voc-line);
         border-block: 1px solid var(--voc-line);
       }
+      .range-band.single { grid-template-columns: 1fr; }
+      .energy-grid.fuel-only { grid-template-columns: 1fr; }
       .range-tile {
         min-width: 0;
         min-height: 78px;
