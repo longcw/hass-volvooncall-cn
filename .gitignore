@@ -10,3 +10,6 @@ __pycache__/
 coverage.xml
 htmlcov/
 /.local/
+
+# Local reverse-engineering notes + probe scripts (not committed)
+.claude/
