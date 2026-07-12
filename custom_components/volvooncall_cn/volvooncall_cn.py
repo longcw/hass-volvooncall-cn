@@ -24,6 +24,7 @@ from .proto.invocation_pb2 import UnlockReq, UnlockType
 from .proto.invocation_pb2 import TailgateControlReq
 from .proto.invocation_pb2 import SunroofControlReq
 from .proto.invocation_pb2 import UpdateStatusReq
+from .proto.invocation_pb2 import ClimatizationStartReq, ClimatizationStopReq
 from .proto.odometer_pb2_grpc import OdometerServiceStub
 from .proto.odometer_pb2 import GetOdometerReq, GetOdometerResp
 from .proto.availability_pb2_grpc import AvailabilityServiceStub
@@ -201,6 +202,24 @@ class VehicleAPI(VehicleBaseAPI):
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
         async for resp in stub.EngineStart(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
+            _LOGGER.debug(res)
+            self.raise_invocation_fail(res.data.status)
+            break
+        return
+
+    async def climatization_control(self, vin, start: bool):
+        stub = InvocationServiceStub(self.channel)
+        req_header = invocationHead(vin=vin)
+        metadata: list = [("vin", vin)]
+        res: invocationCommResp = invocationCommResp()
+        if start:
+            req = ClimatizationStartReq(head=req_header)
+            call = stub.ClimatizationStart
+        else:
+            req = ClimatizationStopReq(head=req_header)
+            call = stub.ClimatizationStop
+        async for resp in call(req, metadata=metadata, timeout=TIMEOUT.seconds):
             res = resp
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
@@ -815,6 +834,12 @@ class Vehicle(object):
 
     async def engine_stop(self):
         await self._api.engine_control(self.vin, False, 0)
+
+    async def climatization_start(self):
+        await self._api.climatization_control(self.vin, True)
+
+    async def climatization_stop(self):
+        await self._api.climatization_control(self.vin, False)
 
     def get(self, key):
         if not hasattr(self, key):

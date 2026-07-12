@@ -385,6 +385,13 @@ metaMap = {
         "unit": "",
         "entity_id": "sunroof_control",
     },
+    "climatization_switch": {
+        "name": "A/C Preconditioning",
+        "device_class": None,
+        "icon": "mdi:air-conditioner",
+        "unit": "",
+        "entity_id": "climatization",
+    },
     "service_warning_msg": {
         "name": "Service Warning Message",
         "device_class": None,

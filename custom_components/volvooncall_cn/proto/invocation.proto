@@ -11,6 +11,8 @@ service InvocationService {
   rpc TailgateControl(TailgateControlReq) returns (stream invocationCommResp) {}
   rpc SunroofControl(SunroofControlReq) returns(stream invocationCommResp) {}
   rpc UpdateStatus(UpdateStatusReq) returns(stream invocationCommResp) {}
+  rpc ClimatizationStart(ClimatizationStartReq) returns(stream invocationCommResp) {}
+  rpc ClimatizationStop(ClimatizationStopReq) returns(stream invocationCommResp) {}
 }
 
 message invocationHead{
@@ -103,5 +105,15 @@ message SunroofControlReq{
 }
 
 message UpdateStatusReq{
+  invocationHead head = 1;
+}
+
+// Remote A/C preconditioning. Verified against a live XC90 T8: head-only
+// request succeeds (status SENT) and the car's climate actually starts/stops.
+message ClimatizationStartReq{
+  invocationHead head = 1;
+}
+
+message ClimatizationStopReq{
   invocationHead head = 1;
 }

@@ -117,6 +117,9 @@
             },
             "sunroof_switch": {
                 "name": "{nickname} Sunroof control"
+            },
+            "climatization_switch": {
+                "name": "{nickname} A/C Preconditioning"
             }
         },
         "button": {

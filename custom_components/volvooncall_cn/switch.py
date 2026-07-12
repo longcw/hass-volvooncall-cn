@@ -27,6 +27,7 @@ async def async_setup_entry(
         if ent.get("isAaos"):
             switchs.append(VolvoTailgateSwitch(coordinator, idx, "tail_gate_switch"))
             switchs.append(VolvoSunroofSwitch(coordinator, idx, "sunroof_switch"))
+            switchs.append(VolvoClimatizationSwitch(coordinator, idx, "climatization_switch"))
 
     async_add_entities(switchs)
 
@@ -75,6 +76,30 @@ class VolvoEngineSwitch(VolvoSwitchEntity):
             "remote_start_at": data.get(start_time),
             "remote_end_at": data.get(end_time)
         }
+
+
+class VolvoClimatizationSwitch(VolvoSwitchEntity):
+    """Remote A/C preconditioning. The status service can't be reliably mapped
+    yet, so this is an assumed-state switch (start/stop are confirmed working)."""
+
+    def __init__(self, coordinator, idx, metaKey):
+        super().__init__(coordinator, idx, metaKey, [])
+        self._attr_assumed_state = True
+        self._optimistic = False
+
+    @property
+    def is_on(self):
+        return self._optimistic
+
+    async def async_turn_on(self) -> None:
+        await self.coordinator.data[self.idx].climatization_start()
+        self._optimistic = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self) -> None:
+        await self.coordinator.data[self.idx].climatization_stop()
+        self._optimistic = False
+        self.async_write_ha_state()
 
 
 class VolvoTailgateSwitch(VolvoSwitchEntity):

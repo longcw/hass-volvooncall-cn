@@ -153,3 +153,15 @@ class UpdateStatusReq(_message.Message):
     HEAD_FIELD_NUMBER: _ClassVar[int]
     head: invocationHead
     def __init__(self, head: _Optional[_Union[invocationHead, _Mapping]] = ...) -> None: ...
+
+class ClimatizationStartReq(_message.Message):
+    __slots__ = ("head",)
+    HEAD_FIELD_NUMBER: _ClassVar[int]
+    head: invocationHead
+    def __init__(self, head: _Optional[_Union[invocationHead, _Mapping]] = ...) -> None: ...
+
+class ClimatizationStopReq(_message.Message):
+    __slots__ = ("head",)
+    HEAD_FIELD_NUMBER: _ClassVar[int]
+    head: invocationHead
+    def __init__(self, head: _Optional[_Union[invocationHead, _Mapping]] = ...) -> None: ...

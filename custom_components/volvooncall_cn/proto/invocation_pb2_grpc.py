@@ -74,6 +74,16 @@ class InvocationServiceStub(object):
                 request_serializer=invocation__pb2.UpdateStatusReq.SerializeToString,
                 response_deserializer=invocation__pb2.invocationCommResp.FromString,
                 _registered_method=True)
+        self.ClimatizationStart = channel.unary_stream(
+                '/invocation.InvocationService/ClimatizationStart',
+                request_serializer=invocation__pb2.ClimatizationStartReq.SerializeToString,
+                response_deserializer=invocation__pb2.invocationCommResp.FromString,
+                _registered_method=True)
+        self.ClimatizationStop = channel.unary_stream(
+                '/invocation.InvocationService/ClimatizationStop',
+                request_serializer=invocation__pb2.ClimatizationStopReq.SerializeToString,
+                response_deserializer=invocation__pb2.invocationCommResp.FromString,
+                _registered_method=True)
 
 
 class InvocationServiceServicer(object):
@@ -127,6 +137,18 @@ class InvocationServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ClimatizationStart(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ClimatizationStop(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_InvocationServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -168,6 +190,16 @@ def add_InvocationServiceServicer_to_server(servicer, server):
             'UpdateStatus': grpc.unary_stream_rpc_method_handler(
                     servicer.UpdateStatus,
                     request_deserializer=invocation__pb2.UpdateStatusReq.FromString,
+                    response_serializer=invocation__pb2.invocationCommResp.SerializeToString,
+            ),
+            'ClimatizationStart': grpc.unary_stream_rpc_method_handler(
+                    servicer.ClimatizationStart,
+                    request_deserializer=invocation__pb2.ClimatizationStartReq.FromString,
+                    response_serializer=invocation__pb2.invocationCommResp.SerializeToString,
+            ),
+            'ClimatizationStop': grpc.unary_stream_rpc_method_handler(
+                    servicer.ClimatizationStop,
+                    request_deserializer=invocation__pb2.ClimatizationStopReq.FromString,
                     response_serializer=invocation__pb2.invocationCommResp.SerializeToString,
             ),
     }
@@ -386,6 +418,60 @@ class InvocationService(object):
             target,
             '/invocation.InvocationService/UpdateStatus',
             invocation__pb2.UpdateStatusReq.SerializeToString,
+            invocation__pb2.invocationCommResp.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ClimatizationStart(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/invocation.InvocationService/ClimatizationStart',
+            invocation__pb2.ClimatizationStartReq.SerializeToString,
+            invocation__pb2.invocationCommResp.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ClimatizationStop(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/invocation.InvocationService/ClimatizationStop',
+            invocation__pb2.ClimatizationStopReq.SerializeToString,
             invocation__pb2.invocationCommResp.FromString,
             options,
             channel_credentials,

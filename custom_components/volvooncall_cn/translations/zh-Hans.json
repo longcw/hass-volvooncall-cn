@@ -117,6 +117,9 @@
             },
             "sunroof_switch": {
                 "name": "{nickname}天窗控制"
+            },
+            "climatization_switch": {
+                "name": "{nickname}空调预开启"
             }
         },
         "button": {
