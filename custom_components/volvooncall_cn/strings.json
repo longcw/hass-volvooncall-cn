@@ -218,6 +218,15 @@
             "charging_status": {
                 "name": "{nickname} Charging Status"
             },
+            "charging_power": {
+                "name": "{nickname} Charging Power"
+            },
+            "estimated_charging_time": {
+                "name": "{nickname} Estimated Charging Time"
+            },
+            "full_charge_electric_range": {
+                "name": "{nickname} Full Charge Electric Range"
+            },
             "home_pile_connector_status": {
                 "name": "{nickname} Home Charger"
             },

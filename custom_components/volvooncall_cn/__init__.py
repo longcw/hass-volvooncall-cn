@@ -1,7 +1,8 @@
 from datetime import timedelta
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -11,6 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -36,6 +38,75 @@ PLATFORMS = {
 }
 
 _LOGGER = logging.getLogger(__name__)
+
+# Bundled Lovelace card (custom:volvo-car-card), served by the integration.
+FRONTEND_PATH = Path(__file__).parent / "frontend"
+FRONTEND_URL_PATH = f"/{DOMAIN}/frontend"
+CARD_RESOURCE_PATH = f"{FRONTEND_URL_PATH}/volvo-car-card.js"
+CARD_RESOURCE_URL = f"{CARD_RESOURCE_PATH}?v=2.0.2"
+
+
+async def _async_register_card_resource(hass: HomeAssistant) -> None:
+    """Auto-register the bundled card as a storage-mode Lovelace resource.
+
+    Lovelace internals are imported lazily and every failure degrades to a log
+    hint ("add the resource manually") so a Home Assistant version mismatch can
+    never break integration setup.
+    """
+    try:
+        from homeassistant.components.lovelace import LOVELACE_DATA
+        from homeassistant.components.lovelace.const import MODE_STORAGE
+    except ImportError:
+        _LOGGER.info(
+            "Lovelace internals unavailable; add %s as a module resource manually",
+            CARD_RESOURCE_URL,
+        )
+        return
+
+    lovelace = hass.data.get(LOVELACE_DATA)
+    if lovelace is None:
+        _LOGGER.info(
+            "Lovelace not loaded; add %s as a module resource manually",
+            CARD_RESOURCE_URL,
+        )
+        return
+
+    if getattr(lovelace, "resource_mode", None) != MODE_STORAGE:
+        _LOGGER.info(
+            "Lovelace resources use YAML mode; add %s as a module resource",
+            CARD_RESOURCE_URL,
+        )
+        return
+
+    resources = lovelace.resources
+    await resources.async_get_info()
+    for item in resources.async_items() or []:
+        url = item.get("url", "")
+        if url.split("?", 1)[0] != CARD_RESOURCE_PATH:
+            continue
+        # Already registered; bump the cache-busting version if it changed.
+        if url != CARD_RESOURCE_URL:
+            await resources.async_update_item(
+                item["id"],
+                {"res_type": "module", "url": CARD_RESOURCE_URL},
+            )
+        return
+
+    await resources.async_create_item(
+        {"res_type": "module", "url": CARD_RESOURCE_URL}
+    )
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Serve and register the bundled Volvo card (runs once at integration load)."""
+    try:
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(FRONTEND_URL_PATH, str(FRONTEND_PATH), True)]
+        )
+        await _async_register_card_resource(hass)
+    except Exception as err:  # pragma: no cover - never block integration setup
+        _LOGGER.warning("Volvo card frontend setup failed: %s", err)
+    return True
 
 
 async def async_update_options(hass: HomeAssistant, config_entry: ConfigEntry):
@@ -98,6 +169,9 @@ class VolvoCoordinator(DataUpdateCoordinator):
         )
         self.volvo_api = volvo_api
         self.store_datas = []
+        # Persistent per-VIN store, reused across polls (rebuilt list each poll
+        # so store_datas stays aligned to the vehicle order without leaking).
+        self._stores_by_vin = {}
         # Connection health tracking
         self._consecutive_failures = 0
         self._last_failure_reason = None
@@ -134,7 +208,8 @@ class VolvoCoordinator(DataUpdateCoordinator):
                 
                 vinVehicleMaps = await self.volvo_api.get_vehicles_vins()
                 vehicles = []
-                
+                store_datas = []
+
                 for vin, vehicleInfos in vinVehicleMaps.items():
                     modelYear = int(vehicleInfos.get("modelYear", 2020))
                     isAaos = modelYear >= 2022
@@ -154,12 +229,33 @@ class VolvoCoordinator(DataUpdateCoordinator):
                     
                     vehicles.append(vehicle)
 
-                    store_data = VolvoStore(self.hass, vin)
-                    await store_data.load_create_data()
-                    self.store_datas.append(store_data)
+                    # Reuse a single persistent store per VIN across polls.
+                    store_data = self._stores_by_vin.get(vin)
+                    if store_data is None:
+                        store_data = VolvoStore(self.hass, vin)
+                        await store_data.load_create_data()
+                        self._stores_by_vin[vin] = store_data
+
+                    # Snapshot the electric range once per 100% charge session
+                    # for long-term battery-health statistics.
+                    if getattr(vehicle, "has_battery", False):
+                        try:
+                            await store_data.async_capture_full_charge_range(
+                                battery_level=vehicle.battery_charge_level,
+                                electric_range=vehicle.electric_range,
+                                sampled_at=datetime.now(timezone.utc).isoformat(),
+                                data_source="battery_grpc",
+                            )
+                        except Exception as err:
+                            _LOGGER.warning(
+                                "Full-charge range capture failed for %s: %s", vin, err
+                            )
+
+                    store_datas.append(store_data)
 
                 # Track successful update
                 self._consecutive_failures = 0
+                self.store_datas = store_datas
                 return vehicles
                 
         except Exception as err:
@@ -501,6 +597,30 @@ metaMap = {
         "icon": "mdi:ev-station",
         "unit": None,
         "entity_id": "charging_status",
+    },
+    "charging_power": {
+        "name": "Charging Power",
+        "device_class": "power",
+        "icon": "mdi:flash",
+        "unit": "kW",
+        "entity_id": "charging_power",
+        "state_class": "measurement",
+    },
+    "estimated_charging_time": {
+        "name": "Estimated Charging Time",
+        "device_class": "duration",
+        "icon": "mdi:timer-outline",
+        "unit": "min",
+        "entity_id": "estimated_charging_time",
+        "state_class": "measurement",
+    },
+    "full_charge_electric_range": {
+        "name": "Full Charge Electric Range",
+        "device_class": "distance",
+        "icon": "mdi:map-marker-distance",
+        "unit": "km",
+        "entity_id": "full_charge_electric_range",
+        "state_class": "measurement",
     },
     "charger_connected": {
         "name": "Charger Connected",

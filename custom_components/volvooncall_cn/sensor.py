@@ -48,6 +48,9 @@ async def async_setup_entry(
             entities.append(VolvoSensor(coordinator, idx, "electric_range"))
             entities.append(VolvoSensor(coordinator, idx, "battery_voltage"))
             entities.append(VolvoChargingStatusSensor(coordinator, idx, "charging_status"))
+            entities.append(VolvoSensor(coordinator, idx, "charging_power"))
+            entities.append(VolvoSensor(coordinator, idx, "estimated_charging_time"))
+            entities.append(VolvoFullChargeRangeSensor(coordinator, idx, "full_charge_electric_range"))
 
         # Home wallbox (家充桩) sensors only if a Volvo-brand pile is bound.
         if getattr(coordinator.data[idx], "has_home_pile", False):
@@ -100,6 +103,29 @@ class VolvoHomePileSensor(VolvoSensor):
     @property
     def extra_state_attributes(self):
         return self.coordinator.data[self.idx].get("home_pile_raw") or {}
+
+
+class VolvoFullChargeRangeSensor(VolvoEntity, SensorEntity):
+    """Publish the electric range captured at the start of each 100% charge session."""
+
+    def __init__(self, coordinator, idx, metaMapKey):
+        """Pass coordinator to CoordinatorEntity."""
+        super().__init__(coordinator, idx, metaMapKey, Platform.SENSOR)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Publish the most recent persisted full-charge range sample."""
+        store_data = self.coordinator.store_datas[self.idx]
+        self._attr_native_value = store_data.get("full_charge_electric_range")
+        self._attr_native_unit_of_measurement = metaMap[self.metaMapKey]["unit"]
+        self._attr_state_class = metaMap[self.metaMapKey]["state_class"]
+        self._attr_extra_state_attributes = {
+            "sampled_at": store_data.get("full_charge_sampled_at"),
+            "sample_count": store_data.get("full_charge_sample_count") or 0,
+            "data_source": store_data.get("full_charge_data_source"),
+            "trigger_battery_level": 100,
+        }
+        self.async_write_ha_state()
 
 
 class VolvoConnectionStatusSensor(VolvoEntity, SensorEntity):

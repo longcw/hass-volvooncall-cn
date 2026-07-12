@@ -218,6 +218,15 @@
             "charging_status": {
                 "name": "{nickname}充电状态"
             },
+            "charging_power": {
+                "name": "{nickname}充电功率"
+            },
+            "estimated_charging_time": {
+                "name": "{nickname}预计充满时间"
+            },
+            "full_charge_electric_range": {
+                "name": "{nickname}满电续航"
+            },
             "home_pile_connector_status": {
                 "name": "{nickname}家充桩"
             },

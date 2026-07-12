@@ -352,6 +352,25 @@ class VehicleAPI(VehicleBaseAPI):
         return res
 
 
+def _read_unknown_varint(message, field_number):
+    """Read a varint-typed field that is present on the wire but not declared
+    in the .proto (so it lands in the message's unknown-field set).
+
+    Used for battery fields we don't want to regenerate the generated protobuf
+    modules for. Returns the int value, or None if absent/unreadable.
+    """
+    try:
+        from google.protobuf.unknown_fields import UnknownFieldSet
+
+        for field in UnknownFieldSet(message):
+            # wire_type 0 == varint
+            if field.field_number == field_number and field.wire_type == 0:
+                return int(field.data)
+    except Exception:  # pragma: no cover - defensive, never break parsing
+        return None
+    return None
+
+
 class Vehicle(object):
     def __init__(self, vin, api, isAaos):
         self.vin = vin
@@ -415,6 +434,8 @@ class Vehicle(object):
         self.battery_voltage = None
         self.charging_status = None
         self.charger_connected = False
+        self.charging_power = None
+        self.estimated_charging_time = None
         self.battery_raw = {}
 
         # Home wallbox (家充桩) — REST; only present if a Volvo-brand pile is bound
@@ -797,6 +818,16 @@ class Vehicle(object):
             else:
                 charging_status = "charging"
 
+            # estimatedChargingTimeToFullMinutes (field #5) is already parsed
+            # into the generated message. chargingPowerWatts (field #10) is NOT
+            # declared in battery.proto, so read it from the unknown-field set
+            # to avoid regenerating the protobuf modules (dev/HA protobuf
+            # runtime versions differ). Both are best-effort until validated
+            # during an actual charge session (observed 0 when full/unplugged).
+            estimated_charging_time = b.field5 or 0
+            charging_power_watts = _read_unknown_varint(b, 10) or 0
+            charging_power = round(charging_power_watts / 1000, 1)
+
             data = {
                 "has_battery": True,
                 "battery_charge_level": charge,
@@ -804,6 +835,8 @@ class Vehicle(object):
                 "battery_voltage": round(b.batteryVoltage, 1),
                 "charging_status": charging_status,
                 "charger_connected": plugged,
+                "charging_power": charging_power,
+                "estimated_charging_time": estimated_charging_time,
                 # Not-yet-identified fields, exposed as diagnostics to label later.
                 "battery_raw": {
                     "charging_status_raw": b.chargingStatus,
