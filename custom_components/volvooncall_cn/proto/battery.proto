@@ -22,7 +22,7 @@ message Timestamp {
 message BatteryStatus {
   Timestamp updateTime = 1;
   double batteryChargeLevel = 2;      // state of charge, % (observed 100.0)
-  double batteryVoltage = 3;          // 12V system voltage, V (observed 12.4)
+  double batteryVoltage = 3;          // MISNAMED: actually average energy consumption, kWh/100km (observed 12.4; owner-confirmed)
   int32 electricRange = 4;            // electric range, km (observed 54)
   int32 field5 = 5;                   // TODO observed 0 (charge power/current?)
   int32 chargerConnectionStatus = 6;  // observed 1 = connected/plugged in

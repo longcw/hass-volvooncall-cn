@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.0.3";
+const CARD_VERSION = "2.0.4";
 
 const ENTITY_DEFINITIONS = {
   lock: ["lock", "lock"],
@@ -28,7 +28,7 @@ const ENTITY_DEFINITIONS = {
   odometer: ["sensor", "odometer"],
   tm_distance: ["sensor", "trip_meter_tm"],
   tm_fuel_consumption: ["sensor", "fuel_average_consumption_liters_per_100_km"],
-  tm_energy_consumption: ["sensor", "tm_energy_consumption"],
+  tm_energy_consumption: ["sensor", "energy_consumption"],
   tm_average_speed: ["sensor", "avg_speed_tm"],
   ta_distance: ["sensor", "trip_meter_at"],
   ta_fuel_consumption: ["sensor", "fuel_consumption_at"],

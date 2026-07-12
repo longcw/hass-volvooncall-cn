@@ -212,8 +212,8 @@
             "electric_range": {
                 "name": "{nickname}纯电续航"
             },
-            "battery_voltage": {
-                "name": "{nickname}12V蓄电池电压"
+            "energy_consumption": {
+                "name": "{nickname}平均电耗"
             },
             "charging_status": {
                 "name": "{nickname}充电状态"

@@ -43,7 +43,7 @@ _LOGGER = logging.getLogger(__name__)
 FRONTEND_PATH = Path(__file__).parent / "frontend"
 FRONTEND_URL_PATH = f"/{DOMAIN}/frontend"
 CARD_RESOURCE_PATH = f"{FRONTEND_URL_PATH}/volvo-car-card.js"
-CARD_RESOURCE_URL = f"{CARD_RESOURCE_PATH}?v=2.0.3"
+CARD_RESOURCE_URL = f"{CARD_RESOURCE_PATH}?v=2.0.4"
 
 
 async def _async_register_card_resource(hass: HomeAssistant) -> None:
@@ -582,14 +582,13 @@ metaMap = {
         "entity_id": "electric_range",
         "state_class": "measurement",
     },
-    "battery_voltage": {
-        "name": "12V Battery Voltage",
-        "device_class": "voltage",
-        "icon": "mdi:car-battery",
-        "unit": "V",
-        "entity_id": "battery_voltage",
+    "energy_consumption": {
+        "name": "Average Energy Consumption",
+        "device_class": None,
+        "icon": "mdi:lightning-bolt",
+        "unit": "kWh/100km",
+        "entity_id": "energy_consumption",
         "state_class": "measurement",
-        "entity_category": EntityCategory.DIAGNOSTIC,
     },
     "charging_status": {
         "name": "Charging Status",

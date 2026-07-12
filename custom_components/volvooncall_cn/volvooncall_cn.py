@@ -431,7 +431,7 @@ class Vehicle(object):
         self.has_battery = False
         self.battery_charge_level = None
         self.electric_range = None
-        self.battery_voltage = None
+        self.energy_consumption = None
         self.charging_status = None
         self.charger_connected = False
         self.charging_power = None
@@ -832,7 +832,10 @@ class Vehicle(object):
                 "has_battery": True,
                 "battery_charge_level": charge,
                 "electric_range": b.electricRange,
-                "battery_voltage": round(b.batteryVoltage, 1),
+                # Battery field #3 (named batteryVoltage in the generated proto)
+                # is actually the average energy consumption in kWh/100km,
+                # confirmed by the vehicle owner (not the 12V system voltage).
+                "energy_consumption": round(b.batteryVoltage, 1),
                 "charging_status": charging_status,
                 "charger_connected": plugged,
                 "charging_power": charging_power,

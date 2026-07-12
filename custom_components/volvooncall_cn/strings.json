@@ -212,8 +212,8 @@
             "electric_range": {
                 "name": "{nickname} Electric Range"
             },
-            "battery_voltage": {
-                "name": "{nickname} 12V Battery Voltage"
+            "energy_consumption": {
+                "name": "{nickname} Average Energy Consumption"
             },
             "charging_status": {
                 "name": "{nickname} Charging Status"

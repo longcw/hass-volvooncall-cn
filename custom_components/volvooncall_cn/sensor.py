@@ -46,7 +46,7 @@ async def async_setup_entry(
         if getattr(coordinator.data[idx], "has_battery", False):
             entities.append(VolvoSensor(coordinator, idx, "battery_charge_level"))
             entities.append(VolvoSensor(coordinator, idx, "electric_range"))
-            entities.append(VolvoSensor(coordinator, idx, "battery_voltage"))
+            entities.append(VolvoSensor(coordinator, idx, "energy_consumption"))
             entities.append(VolvoChargingStatusSensor(coordinator, idx, "charging_status"))
             entities.append(VolvoSensor(coordinator, idx, "charging_power"))
             entities.append(VolvoSensor(coordinator, idx, "estimated_charging_time"))
