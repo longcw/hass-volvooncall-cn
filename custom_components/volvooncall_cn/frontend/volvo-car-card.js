@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.0.4";
+const CARD_VERSION = "2.0.5";
 
 const ENTITY_DEFINITIONS = {
   lock: ["lock", "lock"],
@@ -313,7 +313,7 @@ class VolvoCarCard extends HTMLElement {
 
         <div class="vehicle-area">
           <div class="vehicle-visual">
-            <div class="car-canvas ${openParts.length ? "has-warning" : ""}">
+            <div class="car-canvas ${openParts.length ? "has-warning" : ""}${imageUrl ? " has-image" : ""}">
               <div class="fallback-car" aria-hidden="true">
                 <span class="fallback-shadow"></span>
                 <span class="fallback-body"></span>
@@ -526,7 +526,10 @@ class VolvoCarCard extends HTMLElement {
     const image = this.shadowRoot.querySelector(".car-canvas img");
     image?.addEventListener("error", () => {
       image.hidden = true;
-      this.shadowRoot.querySelector(".car-canvas")?.classList.add("image-failed");
+      const canvas = this.shadowRoot.querySelector(".car-canvas");
+      // Image failed to load: drop back to the CSS placeholder car.
+      canvas?.classList.add("image-failed");
+      canvas?.classList.remove("has-image");
     });
     this.shadowRoot.querySelectorAll("[data-more-info]").forEach((element) => {
       element.addEventListener("click", () => {
@@ -802,6 +805,9 @@ class VolvoCarCard extends HTMLElement {
         z-index: 0;
         pointer-events: none;
       }
+      /* Hide the CSS placeholder car once a real image is shown (the image can
+         be transparent, so the placeholder would otherwise bleed through). */
+      .car-canvas.has-image .fallback-car { display: none; }
       .fallback-car span { position: absolute; display: block; }
       .fallback-shadow {
         left: 24%;
