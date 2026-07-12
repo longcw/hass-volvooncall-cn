@@ -1,6 +1,7 @@
 import logging
 import datetime
 import grpc
+import grpc.aio
 import asyncio
 from datetime import datetime as dt, timedelta, timezone
 from typing import Dict, Any, Optional
@@ -67,8 +68,14 @@ class VehicleAPI(VehicleBaseAPI):
         callCreds = grpc.metadata_call_credentials(self._metadata_callback)
         sslCreds = grpc.ssl_channel_credentials()
         creds = grpc.composite_channel_credentials(sslCreds, callCreds)
-        channel_options: tuple = (("grpc.primary_user_agent", USER_AGENT), ('grpc.accept_encoding', 'gzip'),)
-        channel = grpc.secure_channel(target, creds, options=channel_options)
+        channel_options: tuple = (
+            ("grpc.primary_user_agent", USER_AGENT),
+            ('grpc.accept_encoding', 'gzip'),
+            ('grpc.keepalive_time_ms', 60000),
+            ('grpc.keepalive_timeout_ms', 10000),
+            ('grpc.keepalive_permit_without_calls', 1),
+        )
+        channel = grpc.aio.secure_channel(target, creds, options=channel_options)
         return channel
 
     async def get_channel(self):
@@ -110,7 +117,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = GetFuelReq(vin=vin)
         metadata: list = [("vin", vin)]
         res = GetFuelResp()
-        for res in stub.GetFuel(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.GetFuel(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             break
         return res
 
@@ -119,7 +127,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = GetExteriorReq(vin=vin)
         metadata: list = [("vin", vin)]
         res = GetExteriorResp()
-        for res in stub.GetExterior(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.GetExterior(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             break
         return res
 
@@ -128,7 +137,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = GetHealthReq(vin=vin)
         metadata: list = [("vin", vin)]
         res = GetHealthResp()
-        for res in stub.GetHealth(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.GetHealth(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug("get_health resp")
             _LOGGER.debug(res)
             break
@@ -139,7 +149,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = GetOdometerReq(vin=vin)
         metadata: list = [("vin", vin)]
         res = GetOdometerResp()
-        for res in stub.GetOdometer(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.GetOdometer(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             break
         return res
 
@@ -148,7 +159,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = GetAvailabilityReq(vin=vin)
         metadata: list = [("vin", vin)]
         res = GetAvailabilityResp()
-        for res in stub.GetAvailability(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.GetAvailability(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             break
         return res
 
@@ -158,7 +170,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = windowControlReq(head=req_header, openType=opentype)
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
-        for res in stub.WindowControl(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.WindowControl(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
             break
@@ -170,7 +183,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = StreamLastKnownLocationsReq(vin=vin)
         metadata: list = [("vin", vin)]
         res: StreamLastKnownLocationsResp = StreamLastKnownLocationsResp()
-        for res in stub.StreamLastKnownLocations(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.StreamLastKnownLocations(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             break
         return res
 
@@ -184,7 +198,8 @@ class VehicleAPI(VehicleBaseAPI):
             req = EngineStartReq(head=req_header, isStart=isStart)
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
-        for res in stub.EngineStart(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.EngineStart(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
             break
@@ -196,7 +211,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = HonkFlashReq(head=req_header, honkFlashType=honk_flash_type)
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
-        for res in stub.HonkFlash(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.HonkFlash(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
             break
@@ -208,7 +224,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = LockReq(head=req_header, lockType=LockType.LOCK_REDUCED_GUARD)
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
-        for res in stub.Lock(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.Lock(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
             break
@@ -222,7 +239,8 @@ class VehicleAPI(VehicleBaseAPI):
             req = UnlockReq(head=req_header, unlockType=unlockType)
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
-        for res in stub.Unlock(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.Unlock(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
             break
@@ -233,7 +251,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = GetEngineRemoteStartReq(vin=vin)
         metadata: list = [("vin", vin)]
         res: GetEngineRemoteStartResp = GetEngineRemoteStartResp()
-        for res in stub.GetEngineRemoteStart(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.GetEngineRemoteStart(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             break
         return res
@@ -244,7 +263,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = SunroofControlReq(head=req_header, type=controlType)
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
-        for res in stub.SunroofControl(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.SunroofControl(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
             break
@@ -256,7 +276,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = TailgateControlReq(head=req_header, type=controlType)
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
-        for res in stub.TailgateControl(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.TailgateControl(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
             break
@@ -268,7 +289,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = UpdateStatusReq(head=req_header)
         metadata: list = [("vin", vin)]
         res: invocationCommResp = invocationCommResp()
-        for res in stub.UpdateStatus(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.UpdateStatus(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug("update_status resp")
             _LOGGER.debug(res)
             self.raise_invocation_fail(res.data.status)
@@ -280,7 +302,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = GetPreferencesReq(vin=vin)
         metadata: list = [("vin", vin)]
         res: GetPreferencesResp = GetPreferencesResp()
-        for res in stub.GetPreferences(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.GetPreferences(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             break
         return res
@@ -291,7 +314,8 @@ class VehicleAPI(VehicleBaseAPI):
         req = UpdatePreferencesReq(vin=vin, preference=preference)
         metadata: list = [("vin", vin)]
         res: UpdatePreferencesResp = UpdatePreferencesResp()
-        for res in stub.UpdatePreferences(req, metadata=metadata, timeout=TIMEOUT.seconds):
+        async for resp in stub.UpdatePreferences(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
             _LOGGER.debug(res)
             break
         return res
@@ -467,7 +491,7 @@ class Vehicle(object):
             self._save_to_cache("exterior", data)
             
         except Exception as err:
-            _LOGGER.error(f"Failed to parse exterior for VIN {self.vin}: {err}")
+            _LOGGER.exception(f"Failed to parse exterior for VIN {self.vin}: {err}")
             self._data_source_status["exterior"] = False
             # Try to restore from cache
             if not self._restore_from_cache("exterior"):
@@ -501,7 +525,7 @@ class Vehicle(object):
             self._save_to_cache("health", data)
 
         except Exception as err:
-            _LOGGER.error(f"Failed to parse health for VIN {self.vin}: {err}")
+            _LOGGER.exception(f"Failed to parse health for VIN {self.vin}: {err}")
             self._data_source_status["health"] = False
             if not self._restore_from_cache("health"):
                 _LOGGER.warning(f"No cache available for health data on VIN {self.vin}")
@@ -528,7 +552,7 @@ class Vehicle(object):
             self._save_to_cache("fuel", data)
             
         except Exception as err:
-            _LOGGER.error(f"Failed to parse fuel for VIN {self.vin}: {err}")
+            _LOGGER.exception(f"Failed to parse fuel for VIN {self.vin}: {err}")
             self._data_source_status["fuel"] = False
             if not self._restore_from_cache("fuel"):
                 _LOGGER.warning(f"No cache available for fuel data on VIN {self.vin}")
@@ -553,7 +577,7 @@ class Vehicle(object):
             self._save_to_cache("odometer", data)
             
         except Exception as err:
-            _LOGGER.error(f"Failed to parse odometer for VIN {self.vin}: {err}")
+            _LOGGER.exception(f"Failed to parse odometer for VIN {self.vin}: {err}")
             self._data_source_status["odometer"] = False
             if not self._restore_from_cache("odometer"):
                 _LOGGER.warning(f"No cache available for odometer data on VIN {self.vin}")
@@ -581,7 +605,7 @@ class Vehicle(object):
             self._save_to_cache("availability", data)
             
         except Exception as err:
-            _LOGGER.error(f"Failed to parse availability for VIN {self.vin}: {err}")
+            _LOGGER.exception(f"Failed to parse availability for VIN {self.vin}: {err}")
             self._data_source_status["availability"] = False
             if not self._restore_from_cache("availability"):
                 _LOGGER.warning(f"No cache available for availability data on VIN {self.vin}")
@@ -614,7 +638,7 @@ class Vehicle(object):
             self._save_to_cache("location", data)
             
         except Exception as err:
-            _LOGGER.error(f"Failed to parse location for VIN {self.vin}: {err}")
+            _LOGGER.exception(f"Failed to parse location for VIN {self.vin}: {err}")
             self._data_source_status["location"] = False
             if not self._restore_from_cache("location"):
                 _LOGGER.warning(f"No cache available for location data on VIN {self.vin}")
@@ -644,7 +668,7 @@ class Vehicle(object):
             self._save_to_cache("engine_status", data)
             
         except Exception as err:
-            _LOGGER.error(f"Failed to parse engine status for VIN {self.vin}: {err}")
+            _LOGGER.exception(f"Failed to parse engine status for VIN {self.vin}: {err}")
             self._data_source_status["engine_status"] = False
             if not self._restore_from_cache("engine_status"):
                 _LOGGER.warning(f"No cache available for engine status data on VIN {self.vin}")
@@ -668,7 +692,7 @@ class Vehicle(object):
             self._save_to_cache("preference", data)
             
         except Exception as err:
-            _LOGGER.error(f"Failed to parse car preference for VIN {self.vin}: {err}")
+            _LOGGER.exception(f"Failed to parse car preference for VIN {self.vin}: {err}")
             self._data_source_status["preference"] = False
             if not self._restore_from_cache("preference"):
                 _LOGGER.warning(f"No cache available for preference data on VIN {self.vin}")
