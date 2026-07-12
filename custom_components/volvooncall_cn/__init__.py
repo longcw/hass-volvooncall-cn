@@ -538,6 +538,42 @@ metaMap = {
         "unit": "",
         "entity_id": "home_charger_plugged",
     },
+    "trip_meter_manual": {
+        "name": "Trip Meter TM", "device_class": "distance", "icon": "mdi:map-marker-path",
+        "unit": "km", "entity_id": "trip_meter_tm", "state_class": "measurement",
+    },
+    "trip_meter_auto": {
+        "name": "Trip Meter AT", "device_class": "distance", "icon": "mdi:map-marker-path",
+        "unit": "km", "entity_id": "trip_meter_at", "state_class": "measurement",
+    },
+    "trip_since_charge": {
+        "name": "Trip Since Charge", "device_class": "distance", "icon": "mdi:map-marker-distance",
+        "unit": "km", "entity_id": "trip_since_charge", "state_class": "measurement",
+    },
+    "avg_speed_manual": {
+        "name": "Avg Speed TM", "device_class": "speed", "icon": "mdi:speedometer-medium",
+        "unit": "km/h", "entity_id": "avg_speed_tm", "state_class": "measurement",
+    },
+    "avg_speed_auto": {
+        "name": "Avg Speed AT", "device_class": "speed", "icon": "mdi:speedometer-medium",
+        "unit": "km/h", "entity_id": "avg_speed_at", "state_class": "measurement",
+    },
+    "avg_speed_since_charge": {
+        "name": "Avg Speed Since Charge", "device_class": "speed", "icon": "mdi:speedometer-slow",
+        "unit": "km/h", "entity_id": "avg_speed_since_charge", "state_class": "measurement",
+    },
+    "fuel_consumption_at": {
+        "name": "Fuel Consumption AT", "device_class": None, "icon": "mdi:gas-station",
+        "unit": "L/100km", "entity_id": "fuel_consumption_at", "state_class": "measurement",
+    },
+    "next_maintenance_km": {
+        "name": "Next Maintenance", "device_class": "distance", "icon": "mdi:wrench-clock",
+        "unit": "km", "entity_id": "next_maintenance",
+    },
+    "distance_to_maintenance": {
+        "name": "Distance to Maintenance", "device_class": "distance", "icon": "mdi:wrench-clock",
+        "unit": "km", "entity_id": "distance_to_maintenance", "state_class": "measurement",
+    },
 }
 
 

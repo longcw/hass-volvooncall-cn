@@ -428,6 +428,18 @@ class Vehicle(object):
         self.home_pile_last_session = None
         self.home_pile_raw = {}
 
+        # Trip computer: TM = manual trip meter, AT = automatic trip meter
+        self.trip_meter_manual = None
+        self.trip_meter_auto = None
+        self.trip_since_charge = None
+        self.avg_speed_manual = None
+        self.avg_speed_auto = None
+        self.avg_speed_since_charge = None
+        self.fuel_consumption_at = None
+        # Maintenance (from listBindCar)
+        self.next_maintenance_km = None
+        self.distance_to_maintenance = None
+
         # Caching infrastructure for resilience
         self._cache: Dict[str, Any] = {}  # Stores last known good values
         self._cache_timestamp: Dict[str, dt] = {}  # Timestamps for each data source
@@ -595,6 +607,7 @@ class Vehicle(object):
                 "fuel_amount": round(fuel_data.fuelAmount, 2),
                 "distance_to_empty": fuel_data.distanceToEmptyKm,
                 "fuel_average_consumption_liters_per_100_km": fuel_data.TMFuelAvgConsum,
+                "fuel_consumption_at": round(fuel_data.ATFuleAvgConsum, 1),
             }
             
             # Set attributes
@@ -617,15 +630,24 @@ class Vehicle(object):
             odometer_data = odometer_resp.data
             _LOGGER.debug(odometer_data)
             
-            # Build data dict
+            # Build data dict (TM = manual trip, AT = automatic trip)
+            odo_km = odometer_data.odometerMeters / 1000
             data = {
-                "odo_meter": odometer_data.odometerMeters / 1000,
+                "odo_meter": odo_km,
+                "trip_meter_manual": round(odometer_data.tripMeterManualKm, 1),
+                "trip_meter_auto": round(odometer_data.tripMeterAutomaticKm, 1),
+                "trip_since_charge": odometer_data.tripMeterSinceChargeKm,
+                "avg_speed_manual": odometer_data.averageSpeedKmPerHour,
+                "avg_speed_auto": odometer_data.averageSpeedKmPerHourAutomatic,
+                "avg_speed_since_charge": odometer_data.averageSpeedKmPerHourSinceCharge,
             }
-            
+            if self.next_maintenance_km:
+                data["distance_to_maintenance"] = round(self.next_maintenance_km - odo_km, 1)
+
             # Set attributes
             for key, value in data.items():
                 setattr(self, key, value)
-            
+
             # Cache successful data
             self._save_to_cache("odometer", data)
             
@@ -859,6 +881,10 @@ class Vehicle(object):
                     self.series_name = vehicle["seriesName"]
                     self.model_name = vehicle["modelName"]
                     self.series_code = vehicle.get("seriesCode", "")
+                    try:
+                        self.next_maintenance_km = float(vehicle["maintenanceKM"]) if vehicle.get("maintenanceKM") else None
+                    except (TypeError, ValueError):
+                        self.next_maintenance_km = None
 
         tasks = []
         await self._api.get_channel()

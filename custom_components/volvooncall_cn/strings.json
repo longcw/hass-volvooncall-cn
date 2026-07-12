@@ -179,6 +179,33 @@
             "fuel_average_consumption_liters_per_100_km": {
                 "name": "{nickname} Fuel average consumption liters per 100 km"
             },
+            "fuel_consumption_at": {
+                "name": "{nickname} Fuel Consumption AT"
+            },
+            "trip_meter_manual": {
+                "name": "{nickname} Trip Meter TM"
+            },
+            "trip_meter_auto": {
+                "name": "{nickname} Trip Meter AT"
+            },
+            "trip_since_charge": {
+                "name": "{nickname} Trip Since Charge"
+            },
+            "avg_speed_manual": {
+                "name": "{nickname} Avg Speed TM"
+            },
+            "avg_speed_auto": {
+                "name": "{nickname} Avg Speed AT"
+            },
+            "avg_speed_since_charge": {
+                "name": "{nickname} Avg Speed Since Charge"
+            },
+            "next_maintenance_km": {
+                "name": "{nickname} Next Maintenance"
+            },
+            "distance_to_maintenance": {
+                "name": "{nickname} Distance to Maintenance"
+            },
             "battery_charge_level": {
                 "name": "{nickname} Battery Level"
             },

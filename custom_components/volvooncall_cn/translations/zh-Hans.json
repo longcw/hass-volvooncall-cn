@@ -179,6 +179,33 @@
             "fuel_average_consumption_liters_per_100_km": {
                 "name": "{nickname}百公里油耗"
             },
+            "fuel_consumption_at": {
+                "name": "{nickname}AT油耗"
+            },
+            "trip_meter_manual": {
+                "name": "{nickname}TM里程"
+            },
+            "trip_meter_auto": {
+                "name": "{nickname}AT里程"
+            },
+            "trip_since_charge": {
+                "name": "{nickname}自充电里程"
+            },
+            "avg_speed_manual": {
+                "name": "{nickname}TM平均速度"
+            },
+            "avg_speed_auto": {
+                "name": "{nickname}AT平均速度"
+            },
+            "avg_speed_since_charge": {
+                "name": "{nickname}自充电平均速度"
+            },
+            "next_maintenance_km": {
+                "name": "{nickname}下次保养里程"
+            },
+            "distance_to_maintenance": {
+                "name": "{nickname}距下次保养"
+            },
             "battery_charge_level": {
                 "name": "{nickname}动力电池电量"
             },
