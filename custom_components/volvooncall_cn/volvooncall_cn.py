@@ -761,16 +761,27 @@ class Vehicle(object):
             b: BatteryStatus = battery_resp.data
             _LOGGER.debug(b)
 
-            # charging status enum: only 2 (=idle/complete) observed so far.
-            status_map = {0: "unspecified", 1: "charging", 2: "idle"}
+            # Derive charging status from the verified connection field
+            # (chargerConnectionStatus #6: 1=plugged, 2=unplugged) + charge level.
+            # The raw chargingStatus enum (#17) is NOT a reliable "charging"
+            # signal on its own (observed =1 unplugged, =2 plugged+full), so it's
+            # only kept in battery_raw for later refinement.
+            charge = round(b.batteryChargeLevel)
+            plugged = b.chargerConnectionStatus == 1
+            if not plugged:
+                charging_status = "disconnected"
+            elif charge >= 100:
+                charging_status = "done"
+            else:
+                charging_status = "charging"
 
             data = {
                 "has_battery": True,
-                "battery_charge_level": round(b.batteryChargeLevel),
+                "battery_charge_level": charge,
                 "electric_range": b.electricRange,
                 "battery_voltage": round(b.batteryVoltage, 1),
-                "charging_status": status_map.get(b.chargingStatus, f"status_{b.chargingStatus}"),
-                "charger_connected": b.chargerConnectionStatus == 1,
+                "charging_status": charging_status,
+                "charger_connected": plugged,
                 # Not-yet-identified fields, exposed as diagnostics to label later.
                 "battery_raw": {
                     "charging_status_raw": b.chargingStatus,
