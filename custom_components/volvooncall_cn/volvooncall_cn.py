@@ -35,6 +35,8 @@ from .proto.engineremotestart_pb2 import GetEngineRemoteStartReq, GetEngineRemot
 from .proto.car_preferences_pb2_grpc import CarPreferencesStub
 from .proto.car_preferences_pb2 import GetPreferencesReq, GetPreferencesResp
 from .proto.car_preferences_pb2 import UpdatePreferencesReq, UpdatePreferencesResp, Preference
+from .proto.battery_pb2_grpc import BatteryServiceStub
+from .proto.battery_pb2 import GetLatestBatteryReq, GetLatestBatteryResp, BatteryStatus
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -320,6 +322,16 @@ class VehicleAPI(VehicleBaseAPI):
             break
         return res
 
+    async def get_latest_battery(self, vin) -> GetLatestBatteryResp:
+        stub = BatteryServiceStub(self.channel)
+        req = GetLatestBatteryReq(vin=vin)
+        metadata: list = [("vin", vin)]
+        res = GetLatestBatteryResp()
+        async for resp in stub.GetLatestBattery(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
+            break
+        return res
+
 
 class Vehicle(object):
     def __init__(self, vin, api, isAaos):
@@ -377,6 +389,15 @@ class Vehicle(object):
         self.rear_right_tyre_pressure_warning = False
         self.nickname = ""
 
+        # Battery / charging (PHEV/BEV only; non-PHEV returns empty data)
+        self.has_battery = False
+        self.battery_charge_level = None
+        self.electric_range = None
+        self.battery_voltage = None
+        self.charging_status = None
+        self.charger_connected = False
+        self.battery_raw = {}
+
         # Caching infrastructure for resilience
         self._cache: Dict[str, Any] = {}  # Stores last known good values
         self._cache_timestamp: Dict[str, dt] = {}  # Timestamps for each data source
@@ -391,6 +412,7 @@ class Vehicle(object):
             "availability": True,
             "engine_status": True,
             "preference": True,
+            "battery": True,
         }
 
 
@@ -697,6 +719,51 @@ class Vehicle(object):
             if not self._restore_from_cache("preference"):
                 _LOGGER.warning(f"No cache available for preference data on VIN {self.vin}")
             return
+
+    async def _parse_battery(self):
+        try:
+            battery_resp: GetLatestBatteryResp = await self._api.get_latest_battery(self.vin)
+            # Non-PHEV models (e.g. mild hybrids) return an empty data payload.
+            if not battery_resp.HasField("data"):
+                self.has_battery = False
+                return
+            b: BatteryStatus = battery_resp.data
+            _LOGGER.debug(b)
+
+            # charging status enum: only 2 (=idle/complete) observed so far.
+            status_map = {0: "unspecified", 1: "charging", 2: "idle"}
+
+            data = {
+                "has_battery": True,
+                "battery_charge_level": round(b.batteryChargeLevel),
+                "electric_range": b.electricRange,
+                "battery_voltage": round(b.batteryVoltage, 1),
+                "charging_status": status_map.get(b.chargingStatus, f"status_{b.chargingStatus}"),
+                "charger_connected": b.chargerConnectionStatus == 1,
+                # Not-yet-identified fields, exposed as diagnostics to label later.
+                "battery_raw": {
+                    "charging_status_raw": b.chargingStatus,
+                    "connection_raw": b.chargerConnectionStatus,
+                    "field5": b.field5,
+                    "field7": b.field7,
+                    "field8": b.field8,
+                    "field26": b.field26,
+                    "field28": b.field28,
+                },
+            }
+
+            for key, value in data.items():
+                setattr(self, key, value)
+
+            self._save_to_cache("battery", data)
+
+        except Exception as err:
+            _LOGGER.exception(f"Failed to parse battery for VIN {self.vin}: {err}")
+            self._data_source_status["battery"] = False
+            if not self._restore_from_cache("battery"):
+                _LOGGER.warning(f"No cache available for battery data on VIN {self.vin}")
+            return
+
     async def update(self):
         if not self.series_name:
             vehicles = await self._api.get_vehicles()
@@ -711,7 +778,8 @@ class Vehicle(object):
             funcs = [self._parse_exterior, self._parse_odometer,
                      self._parse_fuel, self._parse_availability,
                      self._parse_location, self._parse_engine_status,
-                     self._parse_health, self._parse_car_preference]
+                     self._parse_health, self._parse_car_preference,
+                     self._parse_battery]
             for runf in funcs:
                 task = tg.create_task(runf())
                 tasks.append(task)

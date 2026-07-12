@@ -33,6 +33,13 @@ async def async_setup_entry(
         entities.append(VolvoConnectionStatusSensor(coordinator, idx, "connection_status"))
         # entities.append(VolvoSensor(coordinator, idx, "fuel_amount_level"))
 
+        # Battery / charging sensors only for PHEV/BEV models (data present).
+        if getattr(coordinator.data[idx], "has_battery", False):
+            entities.append(VolvoSensor(coordinator, idx, "battery_charge_level"))
+            entities.append(VolvoSensor(coordinator, idx, "electric_range"))
+            entities.append(VolvoSensor(coordinator, idx, "battery_voltage"))
+            entities.append(VolvoChargingStatusSensor(coordinator, idx, "charging_status"))
+
     async_add_entities(entities)
 
 
@@ -62,6 +69,14 @@ class VolvoSensor(VolvoEntity, SensorEntity):
         if "entity_category" in metaMap[self.metaMapKey]:
             self._attr_entity_category = metaMap[self.metaMapKey]["entity_category"]
         self.async_write_ha_state()
+
+
+class VolvoChargingStatusSensor(VolvoSensor):
+    """Charging status text sensor; exposes not-yet-identified raw fields as attributes."""
+
+    @property
+    def extra_state_attributes(self):
+        return self.coordinator.data[self.idx].get("battery_raw") or {}
 
 
 class VolvoConnectionStatusSensor(VolvoEntity, SensorEntity):

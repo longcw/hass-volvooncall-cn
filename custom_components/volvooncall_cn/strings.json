@@ -95,6 +95,9 @@
             },
             "rear_right_tyre_pressure_warning": {
                 "name": "{nickname} Rear Right Tyre Pressure Warning"
+            },
+            "charger_connected": {
+                "name": "{nickname} Charger Connected"
             }
         },
         "switch": {
@@ -169,6 +172,18 @@
             },
             "fuel_average_consumption_liters_per_100_km": {
                 "name": "{nickname} Fuel average consumption liters per 100 km"
+            },
+            "battery_charge_level": {
+                "name": "{nickname} Battery Level"
+            },
+            "electric_range": {
+                "name": "{nickname} Electric Range"
+            },
+            "battery_voltage": {
+                "name": "{nickname} 12V Battery Voltage"
+            },
+            "charging_status": {
+                "name": "{nickname} Charging Status"
             }
         },
         "device_tracker": {

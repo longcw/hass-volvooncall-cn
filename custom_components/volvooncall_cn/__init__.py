@@ -463,6 +463,45 @@ metaMap = {
         "entity_id": "connection_status",
         "entity_category": EntityCategory.DIAGNOSTIC,
     },
+    "battery_charge_level": {
+        "name": "Battery Level",
+        "device_class": "battery",
+        "icon": "",
+        "unit": "%",
+        "entity_id": "battery_charge_level",
+        "state_class": "measurement",
+    },
+    "electric_range": {
+        "name": "Electric Range",
+        "device_class": "distance",
+        "icon": "mdi:map-marker-distance",
+        "unit": "km",
+        "entity_id": "electric_range",
+        "state_class": "measurement",
+    },
+    "battery_voltage": {
+        "name": "12V Battery Voltage",
+        "device_class": "voltage",
+        "icon": "mdi:car-battery",
+        "unit": "V",
+        "entity_id": "battery_voltage",
+        "state_class": "measurement",
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "charging_status": {
+        "name": "Charging Status",
+        "device_class": None,
+        "icon": "mdi:ev-station",
+        "unit": None,
+        "entity_id": "charging_status",
+    },
+    "charger_connected": {
+        "name": "Charger Connected",
+        "device_class": "plug",
+        "icon": "mdi:ev-plug-type2",
+        "unit": "",
+        "entity_id": "charger_connected",
+    },
 }
 
 

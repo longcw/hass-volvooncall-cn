@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package services.vehiclestates.battery;
+
+service BatteryService {
+    rpc GetLatestBattery(GetLatestBatteryReq) returns (stream GetLatestBatteryResp) {}
+}
+
+message GetLatestBatteryReq {
+  string vin = 2;
+}
+
+message Timestamp {
+  int32 seconds = 1;
+  int32 nanos = 2;
+}
+
+// High-voltage (traction) battery status for PHEV / BEV models.
+// Field numbers/types reverse-engineered from a live GetLatestBattery response
+// (XC90 T8, confirmed against the Volvo app: 100% charge, 54 km range,
+// plugged in, charging complete). Non-PHEV models return an empty `data`.
+message BatteryStatus {
+  Timestamp updateTime = 1;
+  double batteryChargeLevel = 2;      // state of charge, % (observed 100.0)
+  double batteryVoltage = 3;          // 12V system voltage, V (observed 12.4)
+  int32 electricRange = 4;            // electric range, km (observed 54)
+  int32 field5 = 5;                   // TODO observed 0 (charge power/current?)
+  int32 chargerConnectionStatus = 6;  // observed 1 = connected/plugged in
+  int32 field7 = 7;                   // TODO observed 7
+  int32 field8 = 8;                   // TODO observed 33
+  int32 chargingStatus = 17;          // observed 2 = idle/complete (battery was full)
+  int32 field26 = 26;                 // TODO observed 1
+  int32 field28 = 28;                 // TODO observed 16
+}
+
+message GetLatestBatteryResp {
+  string vin = 2;
+  BatteryStatus data = 3;
+}

@@ -43,6 +43,10 @@ async def async_setup_entry(
         entities.append(VolvoSensor(coordinator, idx, "rear_left_tyre_pressure_warning"))
         entities.append(VolvoSensor(coordinator, idx, "rear_right_tyre_pressure_warning"))
 
+        # Charger-connected (plug) only for PHEV/BEV models.
+        if getattr(coordinator.data[idx], "has_battery", False):
+            entities.append(VolvoSensor(coordinator, idx, "charger_connected"))
+
     async_add_entities(entities)
 
 
