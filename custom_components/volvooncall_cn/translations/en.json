@@ -98,6 +98,9 @@
             },
             "charger_connected": {
                 "name": "{nickname} Charger Connected"
+            },
+            "home_pile_plugged": {
+                "name": "{nickname} Home Charger Plugged"
             }
         },
         "switch": {
@@ -187,6 +190,15 @@
             },
             "charging_status": {
                 "name": "{nickname} Charging Status"
+            },
+            "home_pile_connector_status": {
+                "name": "{nickname} Home Charger"
+            },
+            "home_pile_last_energy": {
+                "name": "{nickname} Last Charge Energy"
+            },
+            "home_pile_appointment": {
+                "name": "{nickname} Charge Schedule"
             },
             "connection_status": {
                 "name": "{nickname} Connection Status",

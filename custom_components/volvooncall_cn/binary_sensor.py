@@ -47,6 +47,10 @@ async def async_setup_entry(
         if getattr(coordinator.data[idx], "has_battery", False):
             entities.append(VolvoSensor(coordinator, idx, "charger_connected"))
 
+        # Home wallbox plugged status only if a Volvo-brand pile is bound.
+        if getattr(coordinator.data[idx], "has_home_pile", False):
+            entities.append(VolvoSensor(coordinator, idx, "home_pile_plugged"))
+
     async_add_entities(entities)
 
 

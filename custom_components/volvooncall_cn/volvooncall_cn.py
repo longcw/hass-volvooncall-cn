@@ -417,6 +417,17 @@ class Vehicle(object):
         self.charger_connected = False
         self.battery_raw = {}
 
+        # Home wallbox (家充桩) — REST; only present if a Volvo-brand pile is bound
+        self.series_code = ""
+        self.has_home_pile = False
+        self.home_pile_name = None
+        self.home_pile_connector_status = None
+        self.home_pile_plugged = False
+        self.home_pile_appointment = None
+        self.home_pile_last_energy = None
+        self.home_pile_last_session = None
+        self.home_pile_raw = {}
+
         # Caching infrastructure for resilience
         self._cache: Dict[str, Any] = {}  # Stores last known good values
         self._cache_timestamp: Dict[str, dt] = {}  # Timestamps for each data source
@@ -432,6 +443,7 @@ class Vehicle(object):
             "engine_status": True,
             "preference": True,
             "battery": True,
+            "home_pile": True,
         }
 
 
@@ -783,6 +795,51 @@ class Vehicle(object):
                 _LOGGER.warning(f"No cache available for battery data on VIN {self.vin}")
             return
 
+    async def _parse_home_pile(self):
+        try:
+            if not self.series_code:
+                self.has_home_pile = False
+                return
+            pile = await self._api.get_home_pile(self.vin, self.series_code)
+            if not pile:
+                self.has_home_pile = False
+                return
+            records = await self._api.get_home_pile_records(pile.get("connectorId"))
+            latest = records[0] if records else {}
+            try:
+                last_energy = round(float(latest.get("chargeUsePower") or 0), 2)
+            except (TypeError, ValueError):
+                last_energy = None
+            appt = f'{pile.get("appointmentStartTime", "")}-{pile.get("appointmentEndTime", "")}'.strip("-")
+            data = {
+                "has_home_pile": True,
+                "home_pile_name": pile.get("equipmentName"),
+                "home_pile_connector_status": pile.get("connectorStatusName"),
+                "home_pile_plugged": pile.get("connectorStatus") == 2,
+                "home_pile_appointment": appt or None,
+                "home_pile_last_energy": last_energy,
+                "home_pile_last_session": latest.get("chargeUseTime"),
+                "home_pile_raw": {
+                    "connector_id": pile.get("connectorId"),
+                    "connector_status": pile.get("connectorStatus"),
+                    "address": pile.get("address"),
+                    "plug_and_charge": pile.get("openEnabled"),
+                    "last_start": latest.get("startTime"),
+                    "last_end": latest.get("endTime"),
+                    "last_stop_reason": latest.get("stopFailReason"),
+                    "station_name": latest.get("stationName"),
+                },
+            }
+            for key, value in data.items():
+                setattr(self, key, value)
+            self._save_to_cache("home_pile", data)
+        except Exception as err:
+            _LOGGER.exception(f"Failed to parse home pile for VIN {self.vin}: {err}")
+            self._data_source_status["home_pile"] = False
+            if not self._restore_from_cache("home_pile"):
+                _LOGGER.warning(f"No cache available for home pile data on VIN {self.vin}")
+            return
+
     async def update(self):
         if not self.series_name:
             vehicles = await self._api.get_vehicles()
@@ -790,6 +847,7 @@ class Vehicle(object):
                 if vehicle["vinCode"] == self.vin:
                     self.series_name = vehicle["seriesName"]
                     self.model_name = vehicle["modelName"]
+                    self.series_code = vehicle.get("seriesCode", "")
 
         tasks = []
         await self._api.get_channel()
@@ -798,7 +856,7 @@ class Vehicle(object):
                      self._parse_fuel, self._parse_availability,
                      self._parse_location, self._parse_engine_status,
                      self._parse_health, self._parse_car_preference,
-                     self._parse_battery]
+                     self._parse_battery, self._parse_home_pile]
             for runf in funcs:
                 task = tg.create_task(runf())
                 tasks.append(task)

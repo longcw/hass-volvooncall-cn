@@ -173,6 +173,26 @@ class VehicleBaseAPI:
 
         return vins
 
+    async def get_home_pile(self, vin, series_code):
+        """Return the account's Volvo-brand home wallbox (家充桩) for this car, or None."""
+        url = urljoin(
+            DIGITALVOLVO_URL,
+            f"/app/charge-pile/api/v1/api/brandPile/getPileList?phone=&seriesCode={series_code}&vin={vin}",
+        )
+        result = await self.digitalvolvo_get(url, {})
+        if not result or not result.get("success"):
+            return None
+        piles = (result.get("data") or {}).get("brandPileList") or []
+        return piles[0] if piles else None
+
+    async def get_home_pile_records(self, connector_id):
+        """Return charging session records (充电参数记录) for a home wallbox connector."""
+        url = urljoin(DIGITALVOLVO_URL, "/app/charge-pile/api/v1/api/brandHomePile/queryList")
+        result = await self.digitalvolvo_post(url, {}, {"connectorId": connector_id})
+        if not result or not result.get("success"):
+            return []
+        return result.get("data") or []
+
 
 def json_loads(s):
     return json.loads(s)

@@ -40,6 +40,12 @@ async def async_setup_entry(
             entities.append(VolvoSensor(coordinator, idx, "battery_voltage"))
             entities.append(VolvoChargingStatusSensor(coordinator, idx, "charging_status"))
 
+        # Home wallbox (家充桩) sensors only if a Volvo-brand pile is bound.
+        if getattr(coordinator.data[idx], "has_home_pile", False):
+            entities.append(VolvoHomePileSensor(coordinator, idx, "home_pile_connector_status"))
+            entities.append(VolvoSensor(coordinator, idx, "home_pile_last_energy"))
+            entities.append(VolvoSensor(coordinator, idx, "home_pile_appointment"))
+
     async_add_entities(entities)
 
 
@@ -77,6 +83,14 @@ class VolvoChargingStatusSensor(VolvoSensor):
     @property
     def extra_state_attributes(self):
         return self.coordinator.data[self.idx].get("battery_raw") or {}
+
+
+class VolvoHomePileSensor(VolvoSensor):
+    """Home wallbox connector status; exposes pile + last-session details as attributes."""
+
+    @property
+    def extra_state_attributes(self):
+        return self.coordinator.data[self.idx].get("home_pile_raw") or {}
 
 
 class VolvoConnectionStatusSensor(VolvoEntity, SensorEntity):

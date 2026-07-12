@@ -509,6 +509,35 @@ metaMap = {
         "unit": "",
         "entity_id": "charger_connected",
     },
+    "home_pile_connector_status": {
+        "name": "Home Charger",
+        "device_class": None,
+        "icon": "mdi:ev-station",
+        "unit": None,
+        "entity_id": "home_charger_status",
+    },
+    "home_pile_last_energy": {
+        "name": "Last Charge Energy",
+        "device_class": None,
+        "icon": "mdi:lightning-bolt",
+        "unit": "kWh",
+        "entity_id": "last_charge_energy",
+        "state_class": "measurement",
+    },
+    "home_pile_appointment": {
+        "name": "Charge Schedule",
+        "device_class": None,
+        "icon": "mdi:clock-outline",
+        "unit": None,
+        "entity_id": "charge_schedule",
+    },
+    "home_pile_plugged": {
+        "name": "Home Charger Plugged",
+        "device_class": "plug",
+        "icon": "mdi:ev-plug-type2",
+        "unit": "",
+        "entity_id": "home_charger_plugged",
+    },
 }
 
 
