@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package services.vehiclestates.parkingclimatization;
+
+service ParkingClimatizationService {
+  rpc GetParkingClimatization(GetParkingClimatizationReq) returns(stream GetParkingClimatizationResp) {}
+}
+
+message GetParkingClimatizationReq {
+  string vin = 2;
+}
+
+message Timestamp {
+  int64 seconds = 1;
+  int64 nanos = 2;
+}
+
+// Remote A/C preconditioning status. Decoded from a live XC90 T8 capture that
+// spanned a full off -> starting -> on -> off cycle:
+//   1 = ON       (running; the running payload also carries target temp + timer)
+//   2 = OFF      (idle / stopped)
+//   3 = STARTING (transient, right after a start request, before ON)
+enum ParkingClimatizationStatus {
+  PARKING_CLIMATIZATION_STATUS_UNSPECIFIED = 0;
+  PARKING_CLIMATIZATION_STATUS_ON = 1;
+  PARKING_CLIMATIZATION_STATUS_OFF = 2;
+  PARKING_CLIMATIZATION_STATUS_STARTING = 3;
+}
+
+message GetParkingClimatizationData {
+  Timestamp updateTime = 1;
+  ParkingClimatizationStatus status = 2;
+  float targetTemperature = 8;  // deg C, present while running (observed 22.0)
+  Timestamp startTime = 14;     // present while running
+  Timestamp endTime = 16;       // present while running (scheduled auto-stop)
+}
+
+message GetParkingClimatizationResp {
+  string vin = 2;
+  GetParkingClimatizationData data = 3;
+}

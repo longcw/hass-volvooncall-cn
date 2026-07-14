@@ -79,27 +79,20 @@ class VolvoEngineSwitch(VolvoSwitchEntity):
 
 
 class VolvoClimatizationSwitch(VolvoSwitchEntity):
-    """Remote A/C preconditioning. The status service can't be reliably mapped
-    yet, so this is an assumed-state switch (start/stop are confirmed working)."""
+    """Remote A/C preconditioning. Reflects the car's real climatization status
+    polled via ParkingClimatizationService, so the switch clears itself when the
+    car auto-stops the A/C or is driven and shut off."""
 
     def __init__(self, coordinator, idx, metaKey):
-        super().__init__(coordinator, idx, metaKey, [])
-        self._attr_assumed_state = True
-        self._optimistic = False
-
-    @property
-    def is_on(self):
-        return self._optimistic
+        super().__init__(coordinator, idx, metaKey, ["climatization_on"])
 
     async def async_turn_on(self) -> None:
         await self.coordinator.data[self.idx].climatization_start()
-        self._optimistic = True
-        self.async_write_ha_state()
+        await self._update_status(True)
 
     async def async_turn_off(self) -> None:
         await self.coordinator.data[self.idx].climatization_stop()
-        self._optimistic = False
-        self.async_write_ha_state()
+        await self._update_status(False)
 
 
 class VolvoTailgateSwitch(VolvoSwitchEntity):

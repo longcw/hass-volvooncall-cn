@@ -33,6 +33,8 @@ from .proto.dtlinternet_pb2_grpc import DtlInternetServiceStub
 from .proto.dtlinternet_pb2 import StreamLastKnownLocationsReq, StreamLastKnownLocationsResp
 from .proto.engineremotestart_pb2_grpc import EngineRemoteStartServiceStub
 from .proto.engineremotestart_pb2 import GetEngineRemoteStartReq, GetEngineRemoteStartResp, EngineRunningStatus
+from .proto.parkingclimatization_pb2_grpc import ParkingClimatizationServiceStub
+from .proto.parkingclimatization_pb2 import GetParkingClimatizationReq, GetParkingClimatizationResp, ParkingClimatizationStatus
 from .proto.car_preferences_pb2_grpc import CarPreferencesStub
 from .proto.car_preferences_pb2 import GetPreferencesReq, GetPreferencesResp
 from .proto.car_preferences_pb2 import UpdatePreferencesReq, UpdatePreferencesResp, Preference
@@ -278,6 +280,17 @@ class VehicleAPI(VehicleBaseAPI):
             break
         return res
 
+    async def get_parking_climatization(self, vin):
+        stub = ParkingClimatizationServiceStub(self.channel)
+        req = GetParkingClimatizationReq(vin=vin)
+        metadata: list = [("vin", vin)]
+        res: GetParkingClimatizationResp = GetParkingClimatizationResp()
+        async for resp in stub.GetParkingClimatization(req, metadata=metadata, timeout=TIMEOUT.seconds):
+            res = resp
+            _LOGGER.debug(res)
+            break
+        return res
+
     async def sunroof_contorl(self, vin: str, controlType: invocationControlType):
         stub = InvocationServiceStub(self.channel)
         req_header = invocationHead(vin=vin)
@@ -390,6 +403,8 @@ class Vehicle(object):
         self.sunroof_open = False
         self.engine_running = False
         self.engine_remote_running = False
+        self.climatization_status = ParkingClimatizationStatus.PARKING_CLIMATIZATION_STATUS_UNSPECIFIED
+        self.climatization_on = False
         self.odo_meter = 0
         self.front_left_window_open = False
         self.front_right_window_open = False
@@ -474,6 +489,7 @@ class Vehicle(object):
             "location": True,
             "availability": True,
             "engine_status": True,
+            "parking_climatization": True,
             "preference": True,
             "battery": True,
             "home_pile": True,
@@ -745,7 +761,7 @@ class Vehicle(object):
             if not self.isAaos:
                 return
             
-            engine_status_resp: GetEngineRemoteStartResp = await self._api.get_engine_remote_start_status(self.vin)
+            engine_status_resp: GetEngineRemoteStartResp = await self._api.get_engine_status(self.vin)
             engine_status = engine_status_resp.data
             _LOGGER.debug(engine_status)
             
@@ -768,6 +784,38 @@ class Vehicle(object):
             self._data_source_status["engine_status"] = False
             if not self._restore_from_cache("engine_status"):
                 _LOGGER.warning(f"No cache available for engine status data on VIN {self.vin}")
+            return
+
+    async def _parse_parking_climatization(self):
+        try:
+            if not self.isAaos:
+                return
+
+            resp: GetParkingClimatizationResp = await self._api.get_parking_climatization(self.vin)
+            _LOGGER.debug(resp)
+            status = resp.data.status
+
+            # No stateful "on" flag comes back from the car; derive it from the
+            # status enum. STARTING is treated as on so the control lights up
+            # immediately after a start request (verified: 1=ON, 2=OFF, 3=STARTING).
+            data = {
+                "climatization_status": status,
+                "climatization_on": status in (
+                    ParkingClimatizationStatus.PARKING_CLIMATIZATION_STATUS_ON,
+                    ParkingClimatizationStatus.PARKING_CLIMATIZATION_STATUS_STARTING,
+                ),
+            }
+
+            for key, value in data.items():
+                setattr(self, key, value)
+
+            self._save_to_cache("parking_climatization", data)
+
+        except Exception as err:
+            _LOGGER.exception(f"Failed to parse parking climatization for VIN {self.vin}: {err}")
+            self._data_source_status["parking_climatization"] = False
+            if not self._restore_from_cache("parking_climatization"):
+                _LOGGER.warning(f"No cache available for parking climatization data on VIN {self.vin}")
             return
 
     async def _parse_car_preference(self):
@@ -929,7 +977,8 @@ class Vehicle(object):
                      self._parse_fuel, self._parse_availability,
                      self._parse_location, self._parse_engine_status,
                      self._parse_health, self._parse_car_preference,
-                     self._parse_battery, self._parse_home_pile]
+                     self._parse_battery, self._parse_home_pile,
+                     self._parse_parking_climatization]
             for runf in funcs:
                 task = tg.create_task(runf())
                 tasks.append(task)
