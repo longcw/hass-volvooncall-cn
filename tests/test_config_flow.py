@@ -74,7 +74,8 @@ class TestConfigFlow:
     @pytest.mark.asyncio
     async def test_user_flow_success(self, hass: HomeAssistant):
         """Test successful user flow."""
-        with patch("custom_components.volvooncall_cn.config_flow.volvo_validation", return_value={}):
+        with patch("custom_components.volvooncall_cn.config_flow.volvo_validation", return_value={}), \
+             patch("custom_components.volvooncall_cn.async_setup_entry", return_value=True):
             result = await hass.config_entries.flow.async_init(
                 DOMAIN,
                 context={"source": config_entries.SOURCE_USER}
@@ -127,7 +128,8 @@ class TestConfigFlow:
     @pytest.mark.asyncio
     async def test_user_flow_default_scan_interval(self, hass: HomeAssistant):
         """Test that default scan interval is used when not specified."""
-        with patch("custom_components.volvooncall_cn.config_flow.volvo_validation", return_value={}):
+        with patch("custom_components.volvooncall_cn.config_flow.volvo_validation", return_value={}), \
+             patch("custom_components.volvooncall_cn.async_setup_entry", return_value=True):
             result = await hass.config_entries.flow.async_init(
                 DOMAIN,
                 context={"source": config_entries.SOURCE_USER}
@@ -149,7 +151,8 @@ class TestConfigFlow:
     @pytest.mark.asyncio
     async def test_user_flow_unique_id(self, hass: HomeAssistant):
         """Test that unique_id is set to username."""
-        with patch("custom_components.volvooncall_cn.config_flow.volvo_validation", return_value={}):
+        with patch("custom_components.volvooncall_cn.config_flow.volvo_validation", return_value={}), \
+             patch("custom_components.volvooncall_cn.async_setup_entry", return_value=True):
             result = await hass.config_entries.flow.async_init(
                 DOMAIN,
                 context={"source": config_entries.SOURCE_USER}
