@@ -384,6 +384,46 @@ def _read_unknown_varint(message, field_number):
     return None
 
 
+def _derive_charging_status(
+    *, has_battery, charge, charger_connected, home_pile_connector_status
+):
+    """Derive the display charging status from the available signals.
+
+    The battery gRPC status alone cannot distinguish "plugged in but idle"
+    from "actively charging" (chargingStatus #17 reads 2 in both cases), so
+    treating plugged + <100% as "charging" is wrong. The home wallbox
+    connectorStatus is the authoritative signal, and the Volvo app itself uses
+    it for display:
+
+        2 = 已插枪  (plugged in, not charging)
+        3 = 充电中  (charging)
+
+    ``home_pile_connector_status`` is that int when the car is engaged with its
+    home pile, else None (no home pile, or pile not in use — e.g. public
+    charging), in which case we fall back to the battery connection flag.
+
+    Returns one of "disconnected" / "connected" / "charging" / "done", or None
+    for non-PHEV/BEV cars.
+    """
+    if not has_battery:
+        return None
+    charge = charge or 0
+    if home_pile_connector_status in (2, 3):
+        plugged = True
+        charging = home_pile_connector_status == 3
+    else:
+        plugged = charger_connected
+        # No wallbox signal available: best-effort legacy heuristic.
+        charging = plugged and charge < 100
+    if not plugged:
+        return "disconnected"
+    if charging:
+        return "charging"
+    if charge >= 100:
+        return "done"
+    return "connected"
+
+
 class Vehicle(object):
     def __init__(self, vin, api, isAaos):
         self.vin = vin
@@ -459,10 +499,16 @@ class Vehicle(object):
         self.home_pile_name = None
         self.home_pile_connector_status = None
         self.home_pile_plugged = False
+        self.home_pile_charging = False
         self.home_pile_appointment = None
         self.home_pile_last_energy = None
         self.home_pile_last_session = None
         self.home_pile_raw = {}
+        # Identifiers needed to issue start/stop charging commands (home pile).
+        self.home_pile_connector_id = None
+        self.home_pile_phone = None
+        self.home_pile_member_id = None
+        self.home_pile_trade_no = None
 
         # Trip computer: TM = manual trip meter, AT = automatic trip meter
         self.trip_meter_manual = None
@@ -852,19 +898,15 @@ class Vehicle(object):
             b: BatteryStatus = battery_resp.data
             _LOGGER.debug(b)
 
-            # Derive charging status from the verified connection field
-            # (chargerConnectionStatus #6: 1=plugged, 2=unplugged) + charge level.
-            # The raw chargingStatus enum (#17) is NOT a reliable "charging"
-            # signal on its own (observed =1 unplugged, =2 plugged+full), so it's
-            # only kept in battery_raw for later refinement.
+            # chargerConnectionStatus #6: 1=plugged, 2=unplugged. This only
+            # tells us the plug is connected, NOT whether the car is actively
+            # charging — the raw chargingStatus enum (#17) reads 2 both when
+            # plugged+full and plugged+idle, so it can't distinguish charging
+            # either. The actual charging state is reconciled after the update
+            # using the home wallbox connectorStatus (see
+            # _reconcile_charging_status); #17 is kept in battery_raw only.
             charge = round(b.batteryChargeLevel)
             plugged = b.chargerConnectionStatus == 1
-            if not plugged:
-                charging_status = "disconnected"
-            elif charge >= 100:
-                charging_status = "done"
-            else:
-                charging_status = "charging"
 
             # estimatedChargingTimeToFullMinutes (field #5) is already parsed
             # into the generated message. chargingPowerWatts (field #10) is NOT
@@ -884,7 +926,6 @@ class Vehicle(object):
                 # is actually the average energy consumption in kWh/100km,
                 # confirmed by the vehicle owner (not the 12V system voltage).
                 "energy_consumption": round(b.batteryVoltage, 1),
-                "charging_status": charging_status,
                 "charger_connected": plugged,
                 "charging_power": charging_power,
                 "estimated_charging_time": estimated_charging_time,
@@ -928,17 +969,26 @@ class Vehicle(object):
             except (TypeError, ValueError):
                 last_energy = None
             appt = f'{pile.get("appointmentStartTime", "")}-{pile.get("appointmentEndTime", "")}'.strip("-")
+            # connectorStatus: 2 = 已插枪 (plugged, idle), 3 = 充电中 (charging).
+            connector_status = pile.get("connectorStatus")
             data = {
                 "has_home_pile": True,
                 "home_pile_name": pile.get("equipmentName"),
                 "home_pile_connector_status": pile.get("connectorStatusName"),
-                "home_pile_plugged": pile.get("connectorStatus") == 2,
+                "home_pile_plugged": connector_status in (2, 3),
+                "home_pile_charging": connector_status == 3,
                 "home_pile_appointment": appt or None,
                 "home_pile_last_energy": last_energy,
                 "home_pile_last_session": latest.get("chargeUseTime"),
+                # Identifiers for the start/stop charging commands. tradeNo is
+                # the active session id (== startChargeSeq) while charging.
+                "home_pile_connector_id": pile.get("connectorId"),
+                "home_pile_phone": pile.get("phone"),
+                "home_pile_member_id": pile.get("memberId"),
+                "home_pile_trade_no": pile.get("tradeNo"),
                 "home_pile_raw": {
                     "connector_id": pile.get("connectorId"),
-                    "connector_status": pile.get("connectorStatus"),
+                    "connector_status": connector_status,
                     "address": pile.get("address"),
                     "plug_and_charge": pile.get("openEnabled"),
                     "last_start": latest.get("startTime"),
@@ -984,6 +1034,40 @@ class Vehicle(object):
                 tasks.append(task)
         for task in tasks:
             _LOGGER.debug(task.result())
+
+        # Battery and home-pile parse concurrently above; reconcile the final
+        # charging status once both have completed.
+        self._reconcile_charging_status()
+
+    def _reconcile_charging_status(self):
+        """Set charging_status from the reconciled battery + home-pile signals."""
+        if not self.has_battery:
+            return
+        home_status = (
+            self.home_pile_raw.get("connector_status") if self.has_home_pile else None
+        )
+        self.charging_status = _derive_charging_status(
+            has_battery=self.has_battery,
+            charge=self.battery_charge_level,
+            charger_connected=self.charger_connected,
+            home_pile_connector_status=home_status,
+        )
+
+    async def home_pile_charge_start(self):
+        """Start charging on the bound home wallbox."""
+        await self._api.start_home_pile_charging(
+            self.home_pile_connector_id,
+            self.vin,
+            self.home_pile_phone,
+            self.home_pile_member_id,
+        )
+
+    async def home_pile_charge_stop(self):
+        """Stop the active charging session on the bound home wallbox."""
+        await self._api.stop_home_pile_charging(
+            self.home_pile_trade_no,
+            self.home_pile_connector_id,
+        )
 
     async def lock_window(self):
         await self._api.window_control(self.vin, invocationControlType.CLOSE)

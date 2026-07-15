@@ -193,6 +193,28 @@ class VehicleBaseAPI:
             return []
         return result.get("data") or []
 
+    async def start_home_pile_charging(self, connector_id, vin, phone, member_id):
+        """Start charging on a Volvo-brand home wallbox (家充桩)."""
+        url = urljoin(DIGITALVOLVO_URL, "/app/charge-pile/api/v1/api/brandHomePile/start")
+        return await self.digitalvolvo_post(url, {}, {
+            "connectorId": connector_id,
+            "vinCode": vin,
+            "phone": phone,
+            "memberId": member_id,
+        })
+
+    async def stop_home_pile_charging(self, start_charge_seq, connector_id):
+        """Stop the active charging session on a home wallbox.
+
+        ``start_charge_seq`` is the active session id (the pile's tradeNo while
+        charging). Note the API expects ``connectorID`` (capital ID) here."""
+        url = urljoin(DIGITALVOLVO_URL, "/app/charge-pile/api/v1/api/brandHomePile/stop")
+        return await self.digitalvolvo_post(url, {}, {
+            "startChargeSeq": start_charge_seq,
+            "connectorID": connector_id,
+            "versions": "1",
+        })
+
 
 def json_loads(s):
     return json.loads(s)

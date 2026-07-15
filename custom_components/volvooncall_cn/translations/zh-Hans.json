@@ -123,6 +123,9 @@
             },
             "climatization_switch": {
                 "name": "{nickname}空调预开启"
+            },
+            "charging_switch": {
+                "name": "{nickname}充电"
             }
         },
         "button": {

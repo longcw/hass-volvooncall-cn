@@ -28,6 +28,8 @@ async def async_setup_entry(
             switchs.append(VolvoTailgateSwitch(coordinator, idx, "tail_gate_switch"))
             switchs.append(VolvoSunroofSwitch(coordinator, idx, "sunroof_switch"))
             switchs.append(VolvoClimatizationSwitch(coordinator, idx, "climatization_switch"))
+        if ent.get("has_home_pile"):
+            switchs.append(VolvoChargingSwitch(coordinator, idx, "charging_switch"))
 
     async_add_entities(switchs)
 
@@ -92,6 +94,24 @@ class VolvoClimatizationSwitch(VolvoSwitchEntity):
 
     async def async_turn_off(self) -> None:
         await self.coordinator.data[self.idx].climatization_stop()
+        await self._update_status(False)
+
+
+class VolvoChargingSwitch(VolvoSwitchEntity):
+    """Start/stop charging on the bound Volvo home wallbox (家充桩).
+
+    Reflects the wallbox's real connector status (充电中), so the switch clears
+    itself when charging finishes or is stopped from the app / car."""
+
+    def __init__(self, coordinator, idx, metaKey):
+        super().__init__(coordinator, idx, metaKey, ["home_pile_charging"])
+
+    async def async_turn_on(self) -> None:
+        await self.coordinator.data[self.idx].home_pile_charge_start()
+        await self._update_status(True)
+
+    async def async_turn_off(self) -> None:
+        await self.coordinator.data[self.idx].home_pile_charge_stop()
         await self._update_status(False)
 
 

@@ -123,6 +123,9 @@
             },
             "climatization_switch": {
                 "name": "{nickname} A/C Preconditioning"
+            },
+            "charging_switch": {
+                "name": "{nickname} Charging"
             }
         },
         "button": {

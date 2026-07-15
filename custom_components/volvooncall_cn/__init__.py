@@ -1,6 +1,7 @@
 from datetime import timedelta
 import logging
 import asyncio
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,10 +44,23 @@ _LOGGER = logging.getLogger(__name__)
 FRONTEND_PATH = Path(__file__).parent / "frontend"
 FRONTEND_URL_PATH = f"/{DOMAIN}/frontend"
 CARD_RESOURCE_PATH = f"{FRONTEND_URL_PATH}/volvo-car-card.js"
-CARD_RESOURCE_URL = f"{CARD_RESOURCE_PATH}?v=2.0.6"
 
 
-async def _async_register_card_resource(hass: HomeAssistant) -> None:
+def _read_card_version() -> str:
+    """Read CARD_VERSION from the bundled card JS, so the cache-busting resource
+    URL has a single source of truth (the .js file) instead of a second constant
+    that silently drifts out of sync on every card change."""
+    try:
+        text = (FRONTEND_PATH / "volvo-car-card.js").read_text(encoding="utf-8")
+        match = re.search(r'CARD_VERSION\s*=\s*"([^"]+)"', text)
+        if match:
+            return match.group(1)
+    except Exception:  # pragma: no cover - defensive, never block setup
+        pass
+    return "0"
+
+
+async def _async_register_card_resource(hass: HomeAssistant, card_url: str) -> None:
     """Auto-register the bundled card as a storage-mode Lovelace resource.
 
     Lovelace internals are imported lazily and every failure degrades to a log
@@ -59,7 +73,7 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
     except ImportError:
         _LOGGER.info(
             "Lovelace internals unavailable; add %s as a module resource manually",
-            CARD_RESOURCE_URL,
+            card_url,
         )
         return
 
@@ -67,14 +81,14 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
     if lovelace is None:
         _LOGGER.info(
             "Lovelace not loaded; add %s as a module resource manually",
-            CARD_RESOURCE_URL,
+            card_url,
         )
         return
 
     if getattr(lovelace, "resource_mode", None) != MODE_STORAGE:
         _LOGGER.info(
             "Lovelace resources use YAML mode; add %s as a module resource",
-            CARD_RESOURCE_URL,
+            card_url,
         )
         return
 
@@ -85,15 +99,15 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
         if url.split("?", 1)[0] != CARD_RESOURCE_PATH:
             continue
         # Already registered; bump the cache-busting version if it changed.
-        if url != CARD_RESOURCE_URL:
+        if url != card_url:
             await resources.async_update_item(
                 item["id"],
-                {"res_type": "module", "url": CARD_RESOURCE_URL},
+                {"res_type": "module", "url": card_url},
             )
         return
 
     await resources.async_create_item(
-        {"res_type": "module", "url": CARD_RESOURCE_URL}
+        {"res_type": "module", "url": card_url}
     )
 
 
@@ -103,7 +117,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         await hass.http.async_register_static_paths(
             [StaticPathConfig(FRONTEND_URL_PATH, str(FRONTEND_PATH), True)]
         )
-        await _async_register_card_resource(hass)
+        version = await hass.async_add_executor_job(_read_card_version)
+        card_url = f"{CARD_RESOURCE_PATH}?v={version}"
+        await _async_register_card_resource(hass, card_url)
     except Exception as err:  # pragma: no cover - never block integration setup
         _LOGGER.warning("Volvo card frontend setup failed: %s", err)
     return True
@@ -492,6 +508,13 @@ metaMap = {
         "icon": "mdi:air-conditioner",
         "unit": "",
         "entity_id": "climatization",
+    },
+    "charging_switch": {
+        "name": "Charging",
+        "device_class": None,
+        "icon": "mdi:ev-station",
+        "unit": "",
+        "entity_id": "charging",
     },
     "service_warning_msg": {
         "name": "Service Warning Message",

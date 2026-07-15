@@ -1,4 +1,8 @@
-const CARD_VERSION = "2.0.6";
+const CARD_VERSION = "2.1.1";
+
+// How long a control's loading spinner waits for the car to confirm the new
+// state before it auto-clears (backend switch confirm-polling can take ~10-30s).
+const PENDING_TIMEOUT_MS = 45000;
 
 const ENTITY_DEFINITIONS = {
   lock: ["lock", "lock"],
@@ -21,10 +25,12 @@ const ENTITY_DEFINITIONS = {
   electric_range: ["sensor", "electric_range"],
   full_charge_range: ["sensor", "full_charge_electric_range"],
   charging_status: ["sensor", "charging_status"],
+  charging: ["switch", "charging"],
   // Remapped to hass-volvooncall-cn (longcw fork) entity IDs.
   charger_connection: ["binary_sensor", "charger_connected"],
   charging_power: ["sensor", "charging_power"],
   charging_time: ["sensor", "estimated_charging_time"],
+  last_charge_energy: ["sensor", "last_charge_energy"],
   odometer: ["sensor", "odometer"],
   tm_distance: ["sensor", "trip_meter_tm"],
   tm_fuel_consumption: ["sensor", "fuel_average_consumption_liters_per_100_km"],
@@ -60,6 +66,7 @@ const CONTROL_DEFINITIONS = [
   ["lock", "lock", "车锁", "mdi:lock-outline"],
   ["engine_control", "switch", "远程启动", "mdi:engine-outline"],
   ["climatization", "switch", "温度调节", "mdi:air-conditioner"],
+  ["charging", "switch", "充电", "mdi:ev-station"],
   ["tailgate_control", "switch", "后备箱", "mdi:car-back"],
   ["sunroof_control", "switch", "天窗", "mdi:home-roof"],
   ["flash", "button", "闪灯", "mdi:car-light-high"],
@@ -136,6 +143,7 @@ class VolvoCarCard extends HTMLElement {
       ...config,
     };
     this._lastStateSignature = undefined;
+    if (!this._pending) this._pending = {};
     this._render();
   }
 
@@ -258,6 +266,9 @@ class VolvoCarCard extends HTMLElement {
     if (!this.isConnected || !this._config) return;
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
 
+    // Clear any pending control whose entity has reached its target state.
+    this._reconcilePending();
+
     const vin = this._vin();
     if (!vin) {
       this.shadowRoot.innerHTML = `${this._styles()}
@@ -296,11 +307,12 @@ class VolvoCarCard extends HTMLElement {
             <span class="connection ${isOnline ? "" : "offline"}">
               <span></span>${isOnline ? "已连接" : "离线"}
             </span>
-            <button class="lock-pill ${isLocked ? "locked" : "unlocked"}"
+            <button class="lock-pill ${isLocked ? "locked" : "unlocked"} ${this._isPending("lock") ? "loading" : ""}"
                     data-action="lock"
-                    ${this._isAvailable("lock") ? "" : "disabled"}
+                    ${this._isPending("lock") || !this._isAvailable("lock") ? "disabled" : ""}
+                    aria-busy="${this._isPending("lock") ? "true" : "false"}"
                     aria-label="${isLocked ? "解锁车辆" : "锁定车辆"}">
-              <ha-icon icon="${isLocked ? "mdi:lock" : "mdi:lock-open-variant"}"></ha-icon>
+              ${this._isPending("lock") ? `<span class="spinner"></span>` : `<ha-icon icon="${isLocked ? "mdi:lock" : "mdi:lock-open-variant"}"></ha-icon>`}
               <span>${isLocked ? "已锁定" : "未锁定"}</span>
             </button>
           </div>
@@ -352,6 +364,7 @@ class VolvoCarCard extends HTMLElement {
             ${this._stateRow("lock", "车辆锁", isLocked ? "已锁定" : "未锁定", isLocked ? "ok" : "warn")}
             ${electric ? this._stateRow("charging_status", "充电状态", this._displayState("charging_status"), charging ? "charge" : "") : ""}
             ${electric ? this._stateRow("full_charge_range", "最近满电续航", this._displayState("full_charge_range"), "charge") : ""}
+            ${electric ? this._stateRow("last_charge_energy", "上次充电电量", this._displayState("last_charge_energy"), "charge") : ""}
             ${this._stateRow("engine", "发动机", this._isOn("engine") ? "运行中" : "关闭", this._isOn("engine") ? "warn" : "")}
             <div class="open-list">
               <span>开口状态</span>
@@ -401,7 +414,10 @@ class VolvoCarCard extends HTMLElement {
                   <small>关键操作会二次确认</small>
                 </div>
                 <div class="controls">
-                  ${CONTROL_DEFINITIONS.map((control) => this._control(control)).join("")}
+                  ${CONTROL_DEFINITIONS
+                    .filter(([key]) => key !== "charging" || (electric && Boolean(this._state("charging"))))
+                    .map((control) => this._control(control))
+                    .join("")}
                 </div>
               </div>`
         }
@@ -511,20 +527,30 @@ class VolvoCarCard extends HTMLElement {
     // Button entities sit at state "unknown" until first pressed, so gating on
     // _isAvailable (which rejects "unknown") would disable them forever. A
     // button is pressable as long as its entity exists and isn't unavailable.
-    const available =
+    let available =
       kind === "button"
         ? Boolean(stateObj) && stateObj.state !== "unavailable"
         : this._isAvailable(key);
+    // Charging can only be started/stopped while the charger is plugged in.
+    if (key === "charging" && !this._isOn("charger_connection")) {
+      available = false;
+    }
     const active =
       kind === "lock" ? stateObj?.state === "locked" : stateObj?.state === "on";
+    const pending = this._isPending(key);
     const dynamicLabel =
       kind === "lock" ? (active ? "已锁车" : "未锁车") : label;
     return `
-      <button class="control ${active ? "active" : ""}"
+      <button class="control ${active ? "active" : ""} ${pending ? "loading" : ""}"
               data-action="${key}"
-              ${available ? "" : "disabled"}
+              ${pending || !available ? "disabled" : ""}
+              aria-busy="${pending ? "true" : "false"}"
               aria-label="${dynamicLabel}">
-        <span class="control-icon"><ha-icon icon="${icon}"></ha-icon></span>
+        <span class="control-icon">${
+          pending
+            ? `<span class="spinner"></span>`
+            : `<ha-icon icon="${icon}"></ha-icon>`
+        }</span>
         <span>${dynamicLabel}</span>
       </button>`;
   }
@@ -560,20 +586,25 @@ class VolvoCarCard extends HTMLElement {
     const entityId = this._entityId(key);
     const stateObj = entityId ? this._hass?.states?.[entityId] : undefined;
     if (!entityId || !stateObj) return;
+    // Ignore repeat presses while a command is still confirming.
+    if (this._isPending(key)) return;
 
     let domain;
     let service;
     let message;
+    let target; // state we wait for; undefined for momentary buttons.
     if (key === "lock") {
       domain = "lock";
       service = stateObj.state === "locked" ? "unlock" : "lock";
       message = service === "unlock" ? "确认解锁车辆？" : null;
+      target = service === "lock" ? "locked" : "unlocked";
     } else if (stateObj.entity_id.startsWith("switch.")) {
       domain = "switch";
       service = stateObj.state === "on" ? "turn_off" : "turn_on";
       const actionName = service === "turn_on" ? "开启" : "关闭";
       const label = CONTROL_DEFINITIONS.find(([controlKey]) => controlKey === key)?.[2] || "设备";
       message = `确认${actionName}${label}？`;
+      target = service === "turn_on" ? "on" : "off";
     } else if (stateObj.entity_id.startsWith("button.")) {
       domain = "button";
       service = "press";
@@ -583,11 +614,50 @@ class VolvoCarCard extends HTMLElement {
     }
 
     if (message && !(await this._confirm(message))) return;
-    try {
-      await this._hass.callService(domain, service, { entity_id: entityId });
-      this._showError("");
-    } catch (error) {
+
+    // Show the loading spinner immediately and block duplicate presses. Fire
+    // the service without awaiting so the spinner stays up through the car's
+    // confirm window; it clears when the entity reaches `target` (see
+    // _reconcilePending) or after PENDING_TIMEOUT_MS.
+    if (target !== undefined) this._setPending(key, target);
+    this._showError("");
+    Promise.resolve(
+      this._hass.callService(domain, service, { entity_id: entityId }),
+    ).catch((error) => {
+      if (target !== undefined) this._clearPending(key);
       this._showError(`操作失败：${error?.message || error}`);
+    });
+  }
+
+  _isPending(key) {
+    return Boolean(this._pending?.[key]);
+  }
+
+  _setPending(key, target) {
+    if (!this._pending) this._pending = {};
+    this._clearPending(key);
+    const timer = setTimeout(() => {
+      delete this._pending[key];
+      this._render();
+    }, PENDING_TIMEOUT_MS);
+    this._pending[key] = { target, timer };
+    this._render();
+  }
+
+  _clearPending(key) {
+    const entry = this._pending?.[key];
+    if (entry) {
+      clearTimeout(entry.timer);
+      delete this._pending[key];
+    }
+  }
+
+  _reconcilePending() {
+    if (!this._pending) return;
+    for (const key of Object.keys(this._pending)) {
+      if (this._state(key)?.state === this._pending[key].target) {
+        this._clearPending(key);
+      }
     }
   }
 
@@ -1054,7 +1124,7 @@ class VolvoCarCard extends HTMLElement {
       .trip-metrics strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
       .trip-metrics span { color: var(--voc-secondary); font-size: 10px; }
       .controls-wrap { border-top: 1px solid var(--voc-line); padding: 14px 22px 20px; }
-      .controls { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+      .controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
       .control {
         min-width: 0;
         min-height: 64px;
@@ -1083,6 +1153,26 @@ class VolvoCarCard extends HTMLElement {
       .control.active { color: var(--voc-blue); }
       .control.active .control-icon { background: var(--voc-blue); color: #fff; }
       .control:disabled { opacity: .35; cursor: default; }
+      /* A pending control stays fully opaque (it's "working", not disabled). */
+      .control.loading, .control.loading:disabled { opacity: 1; color: var(--voc-blue); }
+      .spinner {
+        display: inline-block;
+        width: 17px;
+        height: 17px;
+        border-radius: 50%;
+        border: 2px solid color-mix(in srgb, var(--voc-blue) 28%, transparent);
+        border-top-color: var(--voc-blue);
+        animation: voc-spin .7s linear infinite;
+      }
+      .lock-pill .spinner {
+        width: 15px;
+        height: 15px;
+        border-color: color-mix(in srgb, currentColor 32%, transparent);
+        border-top-color: currentColor;
+      }
+      .lock-pill.loading { opacity: 1; }
+      @keyframes voc-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1.6s; } }
       .confirm-dialog {
         width: min(88vw, 330px);
         border: 0;
