@@ -7,7 +7,12 @@ which the Volvo app itself uses for display. `_derive_charging_status`
 reconciles both sources.
 """
 
-from custom_components.volvooncall_cn.volvooncall_cn import _derive_charging_status
+from unittest.mock import AsyncMock
+
+from custom_components.volvooncall_cn.volvooncall_cn import (
+    Vehicle,
+    _derive_charging_status,
+)
 
 
 def test_home_pile_plugged_but_idle_is_not_charging():
@@ -96,3 +101,39 @@ def test_non_phev_has_no_charging_status():
         )
         is None
     )
+
+
+def _vehicle():
+    v = Vehicle("YV1LFH5F3S1388274", AsyncMock(), isAaos=True)
+    v.has_battery = True
+    v.battery_charge_level = 37
+    v.charger_connected = True
+    v.has_home_pile = True
+    return v
+
+
+def test_charging_power_and_eta_come_from_wallbox_while_charging():
+    v = _vehicle()
+    v.home_pile_raw = {"connector_status": 3}
+    v.home_pile_power = 3.4  # kW, from brandHomePile/status
+    v.home_pile_eta = 199  # minutes
+    # Battery-derived fallback that must be overridden by the wallbox reading.
+    v.charging_power = 0.0
+    v.estimated_charging_time = 0
+    v._reconcile_charging_status()
+    assert v.charging_status == "charging"
+    assert v.charging_power == 3.4
+    assert v.estimated_charging_time == 199
+
+
+def test_charging_power_and_eta_zero_when_not_charging():
+    v = _vehicle()
+    v.home_pile_raw = {"connector_status": 2}  # plugged, idle
+    v.home_pile_power = None
+    v.home_pile_eta = None
+    v.charging_power = 9.9  # stale value must be cleared
+    v.estimated_charging_time = 123
+    v._reconcile_charging_status()
+    assert v.charging_status == "connected"
+    assert v.charging_power == 0.0
+    assert v.estimated_charging_time == 0

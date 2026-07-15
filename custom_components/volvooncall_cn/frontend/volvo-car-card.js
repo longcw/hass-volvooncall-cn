@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.1.1";
+const CARD_VERSION = "2.1.3";
 
 // How long a control's loading spinner waits for the car to confirm the new
 // state before it auto-clears (backend switch confirm-polling can take ~10-30s).
@@ -327,7 +327,7 @@ class VolvoCarCard extends HTMLElement {
           ${electric ? this._levelTile("battery", "动力电池", battery, "%", "mdi:battery-high") : ""}
           ${this._levelTile("fuel", "燃油余量", fuel, "L", "mdi:fuel")}
           ${electric ? this._metricTile("charging_power", "充电功率", "mdi:ev-station") : ""}
-          ${electric ? this._metricTile("charging_time", "预计充满", "mdi:timer-outline") : ""}
+          ${electric ? this._metricTile("charging_time", "预计充满", "mdi:timer-outline", this._durationDisplay("charging_time")) : ""}
         </div>
 
         <div class="vehicle-area">
@@ -364,7 +364,7 @@ class VolvoCarCard extends HTMLElement {
             ${this._stateRow("lock", "车辆锁", isLocked ? "已锁定" : "未锁定", isLocked ? "ok" : "warn")}
             ${electric ? this._stateRow("charging_status", "充电状态", this._displayState("charging_status"), charging ? "charge" : "") : ""}
             ${electric ? this._stateRow("full_charge_range", "最近满电续航", this._displayState("full_charge_range"), "charge") : ""}
-            ${electric ? this._stateRow("last_charge_energy", "上次充电电量", this._displayState("last_charge_energy"), "charge") : ""}
+            ${electric ? this._stateRow("last_charge_energy", "最近充电电量", this._displayState("last_charge_energy"), "charge") : ""}
             ${this._stateRow("engine", "发动机", this._isOn("engine") ? "运行中" : "关闭", this._isOn("engine") ? "warn" : "")}
             <div class="open-list">
               <span>开口状态</span>
@@ -475,13 +475,25 @@ class VolvoCarCard extends HTMLElement {
       </button>`;
   }
 
-  _metricTile(key, label, icon) {
+  _metricTile(key, label, icon, displayValue) {
+    const value = displayValue !== undefined ? displayValue : this._displayState(key);
     return `
       <button class="level-tile compact ${this._isAvailable(key) ? "" : "unavailable"}"
               data-more-info="${this._escape(this._entityId(key))}">
         <span class="tile-heading"><ha-icon icon="${icon}"></ha-icon>${label}</span>
-        <strong>${this._escape(this._displayState(key))}</strong>
+        <strong>${this._escape(value)}</strong>
       </button>`;
+  }
+
+  // Format a minutes-valued sensor as e.g. "3h19m" / "45m" / "—" (empty/zero).
+  _durationDisplay(key) {
+    const mins = this._stateNumber(key);
+    if (mins === undefined || mins <= 0) return "—";
+    const total = Math.round(mins);
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (h > 0) return m > 0 ? `${h}h${m}m` : `${h}h`;
+    return `${m}m`;
   }
 
   _partOverlay(part) {
@@ -1163,6 +1175,12 @@ class VolvoCarCard extends HTMLElement {
         border: 2px solid color-mix(in srgb, var(--voc-blue) 28%, transparent);
         border-top-color: var(--voc-blue);
         animation: voc-spin .7s linear infinite;
+      }
+      /* An active control has a solid blue icon circle, so the blue spinner
+         (shown e.g. while stopping charging) would be invisible — use white. */
+      .control.active .control-icon .spinner {
+        border-color: color-mix(in srgb, #fff 38%, transparent);
+        border-top-color: #fff;
       }
       .lock-pill .spinner {
         width: 15px;

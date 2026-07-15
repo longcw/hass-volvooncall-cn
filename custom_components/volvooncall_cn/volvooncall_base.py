@@ -193,6 +193,18 @@ class VehicleBaseAPI:
             return []
         return result.get("data") or []
 
+    async def get_home_pile_status(self, trade_no, vin):
+        """Live status of an active home-wallbox charging session.
+
+        Returns the raw ``data`` dict (includes ``power`` in kW,
+        ``estimatedChargingTime`` in minutes, per-phase current/voltage), or
+        None. Only meaningful while a session is active (connectorStatus 3)."""
+        url = urljoin(DIGITALVOLVO_URL, "/app/charge-pile/api/v1/api/brandHomePile/status")
+        result = await self.digitalvolvo_post(url, {}, {"tradeNo": trade_no, "vinCode": vin})
+        if not result or not result.get("success"):
+            return None
+        return result.get("data")
+
     async def start_home_pile_charging(self, connector_id, vin, phone, member_id):
         """Start charging on a Volvo-brand home wallbox (家充桩)."""
         url = urljoin(DIGITALVOLVO_URL, "/app/charge-pile/api/v1/api/brandHomePile/start")

@@ -500,6 +500,9 @@ class Vehicle(object):
         self.home_pile_connector_status = None
         self.home_pile_plugged = False
         self.home_pile_charging = False
+        # Live charge session metrics (from brandHomePile/status while charging).
+        self.home_pile_power = None
+        self.home_pile_eta = None
         self.home_pile_appointment = None
         self.home_pile_last_energy = None
         self.home_pile_last_session = None
@@ -971,12 +974,33 @@ class Vehicle(object):
             appt = f'{pile.get("appointmentStartTime", "")}-{pile.get("appointmentEndTime", "")}'.strip("-")
             # connectorStatus: 2 = 已插枪 (plugged, idle), 3 = 充电中 (charging).
             connector_status = pile.get("connectorStatus")
+
+            # While charging, the wallbox live status carries the instantaneous
+            # power (kW) and ETA — the battery gRPC does not (its power field
+            # reads 0). getPileList's chargeUsePower is session *energy* (kWh),
+            # not power, so it can't be used here.
+            pile_power = None
+            pile_eta = None
+            if connector_status == 3 and pile.get("tradeNo"):
+                status = await self._api.get_home_pile_status(pile["tradeNo"], self.vin)
+                if status:
+                    try:
+                        pile_power = round(float(status.get("power") or 0), 1)
+                    except (TypeError, ValueError):
+                        pile_power = None
+                    try:
+                        pile_eta = int(float(status.get("estimatedChargingTime") or 0))
+                    except (TypeError, ValueError):
+                        pile_eta = None
+
             data = {
                 "has_home_pile": True,
                 "home_pile_name": pile.get("equipmentName"),
                 "home_pile_connector_status": pile.get("connectorStatusName"),
                 "home_pile_plugged": connector_status in (2, 3),
                 "home_pile_charging": connector_status == 3,
+                "home_pile_power": pile_power,
+                "home_pile_eta": pile_eta,
                 "home_pile_appointment": appt or None,
                 "home_pile_last_energy": last_energy,
                 "home_pile_last_session": latest.get("chargeUseTime"),
@@ -1052,6 +1076,19 @@ class Vehicle(object):
             charger_connected=self.charger_connected,
             home_pile_connector_status=home_status,
         )
+
+        # Charging power (kW) and ETA (min): the wallbox live status is the
+        # source of truth. The battery gRPC power field reads 0, so only trust
+        # it as a fallback when no wallbox reading is available. When not
+        # charging there is no power flowing and no ETA.
+        if self.charging_status == "charging":
+            if self.home_pile_power is not None:
+                self.charging_power = self.home_pile_power
+            if self.home_pile_eta is not None:
+                self.estimated_charging_time = self.home_pile_eta
+        else:
+            self.charging_power = 0.0
+            self.estimated_charging_time = 0
 
     async def home_pile_charge_start(self):
         """Start charging on the bound home wallbox."""
