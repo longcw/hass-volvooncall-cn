@@ -424,6 +424,40 @@ def _derive_charging_status(
     return "connected"
 
 
+def _parse_duration_minutes(value):
+    """Parse a charge-session duration into whole minutes.
+
+    The records API returns a pre-formatted Chinese string ('6时25分9秒');
+    getPileList returns plain minutes. Returns an int, or None if unparseable.
+    The charging card formats minutes for display, so it must receive a number."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))  # already a plain number of minutes
+    except (TypeError, ValueError):
+        pass
+    total = 0
+    found = False
+    num = ""
+    for ch in text:
+        if ch.isdigit():
+            num += ch
+            continue
+        if num and ch in ("时", "分", "秒"):
+            if ch == "时":
+                total += int(num) * 60
+            elif ch == "分":
+                total += int(num)
+            else:  # 秒 -> round up to whole minutes
+                total += round(int(num) / 60)
+            found = True
+        num = ""
+    return total if found else None
+
+
 class Vehicle(object):
     def __init__(self, vin, api, isAaos):
         self.vin = vin
@@ -503,6 +537,11 @@ class Vehicle(object):
         # Live charge session metrics (from brandHomePile/status while charging).
         self.home_pile_power = None
         self.home_pile_eta = None
+        # Live charging electrical metrics (brandHomePile/status: voltageA /
+        # currentA / totalPower). Only populated while a session is active.
+        self.charging_voltage = None
+        self.charging_current = None
+        self.charging_session_energy = None
         self.home_pile_appointment = None
         self.home_pile_last_energy = None
         self.home_pile_last_session = None
@@ -512,6 +551,13 @@ class Vehicle(object):
         self.home_pile_phone = None
         self.home_pile_member_id = None
         self.home_pile_trade_no = None
+        self.home_pile_equipment_id = None
+        # Plug-and-charge (即插即充) enabled flag; None = unknown (see parse note).
+        self.plug_and_charge_enabled = None
+        # Last completed charge session + pile address, surfaced as attributes on
+        # the charging_status sensor for the charging card's statistics section.
+        self.last_charge_order = None
+        self.charge_pile_address = None
 
         # Trip computer: TM = manual trip meter, AT = automatic trip meter
         self.trip_meter_manual = None
@@ -816,9 +862,12 @@ class Vehicle(object):
             
             # Build data dict
             data = {
-                "engine_remote_running": (engine_status.engineRunningStatus == EngineRunningStatus.STARTED),
-                "engine_remote_start_time": engine_status.engineStartTimestamp,
-                "engine_remote_end_time": engine_status.engineStopTimestamp,
+                "engine_remote_running": engine_status.engineRunningStatus in (
+                    EngineRunningStatus.Starting,
+                    EngineRunningStatus.Running,
+                ),
+                "engine_remote_start_time": engine_status.engineStartTime.seconds,
+                "engine_remote_end_time": engine_status.engineEndTime.seconds,
             }
             
             # Set attributes
@@ -971,9 +1020,28 @@ class Vehicle(object):
                 last_energy = round(float(latest.get("chargeUsePower") or 0), 2)
             except (TypeError, ValueError):
                 last_energy = None
+            # Last completed session, shaped for the charging card statistics.
+            last_charge_order = None
+            if latest:
+                last_charge_order = {
+                    "energy_kwh": last_energy,
+                    "duration": _parse_duration_minutes(latest.get("chargeUseTime")),
+                    "start_time": latest.get("startTime"),
+                    "end_time": latest.get("endTime"),
+                    "order_no": latest.get("orderNo") or latest.get("tradeNo"),
+                    "station_name": latest.get("stationName"),
+                }
             appt = f'{pile.get("appointmentStartTime", "")}-{pile.get("appointmentEndTime", "")}'.strip("-")
             # connectorStatus: 2 = 已插枪 (plugged, idle), 3 = 充电中 (charging).
             connector_status = pile.get("connectorStatus")
+
+            # Plug-and-charge (即插即充) state. The pile list does not expose a
+            # reliable boolean (openEnabled is the share/open flag, not this), so
+            # read plugAndChargeEnabled when present and otherwise leave it
+            # unknown (None) — the switch is optimistic. TODO: confirm the real
+            # field against a live toggle during validation.
+            pnc = pile.get("plugAndChargeEnabled")
+            plug_and_charge_enabled = bool(pnc) if pnc is not None else None
 
             # While charging, the wallbox live status carries the instantaneous
             # power (kW) and ETA — the battery gRPC does not (its power field
@@ -981,6 +1049,9 @@ class Vehicle(object):
             # not power, so it can't be used here.
             pile_power = None
             pile_eta = None
+            charging_voltage = None
+            charging_current = None
+            charging_session_energy = None
             if connector_status == 3 and pile.get("tradeNo"):
                 status = await self._api.get_home_pile_status(pile["tradeNo"], self.vin)
                 if status:
@@ -992,6 +1063,20 @@ class Vehicle(object):
                         pile_eta = int(float(status.get("estimatedChargingTime") or 0))
                     except (TypeError, ValueError):
                         pile_eta = None
+                    # Live A/V per phase A and this session's accumulated energy
+                    # (kWh). Field names confirmed against a live charging dump.
+                    try:
+                        charging_voltage = round(float(status.get("voltageA")), 1)
+                    except (TypeError, ValueError):
+                        charging_voltage = None
+                    try:
+                        charging_current = round(float(status.get("currentA")), 2)
+                    except (TypeError, ValueError):
+                        charging_current = None
+                    try:
+                        charging_session_energy = round(float(status.get("totalPower")), 2)
+                    except (TypeError, ValueError):
+                        charging_session_energy = None
 
             data = {
                 "has_home_pile": True,
@@ -1001,6 +1086,9 @@ class Vehicle(object):
                 "home_pile_charging": connector_status == 3,
                 "home_pile_power": pile_power,
                 "home_pile_eta": pile_eta,
+                "charging_voltage": charging_voltage,
+                "charging_current": charging_current,
+                "charging_session_energy": charging_session_energy,
                 "home_pile_appointment": appt or None,
                 "home_pile_last_energy": last_energy,
                 "home_pile_last_session": latest.get("chargeUseTime"),
@@ -1010,6 +1098,10 @@ class Vehicle(object):
                 "home_pile_phone": pile.get("phone"),
                 "home_pile_member_id": pile.get("memberId"),
                 "home_pile_trade_no": pile.get("tradeNo"),
+                "home_pile_equipment_id": pile.get("equipmentId"),
+                "plug_and_charge_enabled": plug_and_charge_enabled,
+                "last_charge_order": last_charge_order,
+                "charge_pile_address": pile.get("address"),
                 "home_pile_raw": {
                     "connector_id": pile.get("connectorId"),
                     "connector_status": connector_status,
@@ -1105,6 +1197,14 @@ class Vehicle(object):
             self.home_pile_trade_no,
             self.home_pile_connector_id,
         )
+
+    async def set_plug_and_charge(self, enabled: bool):
+        """Toggle plug-and-charge (即插即充) on the bound home wallbox."""
+        await self._api.set_plug_and_charge(self.home_pile_equipment_id, enabled)
+
+    async def sign_in(self):
+        """Perform the app's daily member check-in (签到)."""
+        return await self._api.sign_in(self.home_pile_member_id)
 
     async def lock_window(self):
         await self._api.window_control(self.vin, invocationControlType.CLOSE)

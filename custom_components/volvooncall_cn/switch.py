@@ -30,6 +30,7 @@ async def async_setup_entry(
             switchs.append(VolvoClimatizationSwitch(coordinator, idx, "climatization_switch"))
         if ent.get("has_home_pile"):
             switchs.append(VolvoChargingSwitch(coordinator, idx, "charging_switch"))
+            switchs.append(VolvoPlugAndChargeSwitch(coordinator, idx, "plug_and_charge_switch"))
 
     async_add_entities(switchs)
 
@@ -113,6 +114,44 @@ class VolvoChargingSwitch(VolvoSwitchEntity):
     async def async_turn_off(self) -> None:
         await self.coordinator.data[self.idx].home_pile_charge_stop()
         await self._update_status(False)
+
+
+class VolvoPlugAndChargeSwitch(VolvoEntity, SwitchEntity):
+    """Toggle 即插即充 (auto-start charging when the connector is plugged in).
+
+    The pile list does not expose a reliable plug-and-charge state, so this is
+    an optimistic (assumed-state) switch: it reflects the last command sent, and
+    prefers the pile's reported flag when one becomes available."""
+
+    _attr_assumed_state = True
+
+    def __init__(self, coordinator, idx, metaKey):
+        super().__init__(coordinator, idx, metaKey, Platform.SWITCH)
+        self._optimistic = None
+
+    @property
+    def available(self):
+        vehicle = self.coordinator.data[self.idx]
+        return bool(vehicle.get("home_pile_equipment_id"))
+
+    @property
+    def is_on(self):
+        reported = self.coordinator.data[self.idx].get("plug_and_charge_enabled")
+        if reported is not None:
+            return bool(reported)
+        return bool(self._optimistic)
+
+    async def async_turn_on(self) -> None:
+        await self.coordinator.data[self.idx].set_plug_and_charge(True)
+        self._optimistic = True
+        self.async_write_ha_state()
+        await self.coordinator.async_force_refresh()
+
+    async def async_turn_off(self) -> None:
+        await self.coordinator.data[self.idx].set_plug_and_charge(False)
+        self._optimistic = False
+        self.async_write_ha_state()
+        await self.coordinator.async_force_refresh()
 
 
 class VolvoTailgateSwitch(VolvoSwitchEntity):

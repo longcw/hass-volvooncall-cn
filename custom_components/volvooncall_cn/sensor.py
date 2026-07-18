@@ -57,6 +57,9 @@ async def async_setup_entry(
             entities.append(VolvoHomePileSensor(coordinator, idx, "home_pile_connector_status"))
             entities.append(VolvoSensor(coordinator, idx, "home_pile_last_energy"))
             entities.append(VolvoSensor(coordinator, idx, "home_pile_appointment"))
+            entities.append(VolvoSensor(coordinator, idx, "charging_voltage"))
+            entities.append(VolvoSensor(coordinator, idx, "charging_current"))
+            entities.append(VolvoSensor(coordinator, idx, "charging_session_energy"))
 
     async_add_entities(entities)
 
@@ -90,11 +93,26 @@ class VolvoSensor(VolvoEntity, SensorEntity):
 
 
 class VolvoChargingStatusSensor(VolvoSensor):
-    """Charging status text sensor; exposes not-yet-identified raw fields as attributes."""
+    """Charging status text sensor.
+
+    Exposes raw battery fields plus the last-charge session and home-pile
+    identity as attributes, which the charging card reads for its statistics
+    section (last_charge_order / charge_pile_name / charge_pile_address)."""
 
     @property
     def extra_state_attributes(self):
-        return self.coordinator.data[self.idx].get("battery_raw") or {}
+        vehicle = self.coordinator.data[self.idx]
+        attrs = dict(vehicle.get("battery_raw") or {})
+        order = vehicle.get("last_charge_order")
+        if order:
+            attrs["last_charge_order"] = order
+        pile_name = vehicle.get("home_pile_name")
+        if pile_name:
+            attrs["charge_pile_name"] = pile_name
+        pile_address = vehicle.get("charge_pile_address")
+        if pile_address:
+            attrs["charge_pile_address"] = pile_address
+        return attrs
 
 
 class VolvoHomePileSensor(VolvoSensor):

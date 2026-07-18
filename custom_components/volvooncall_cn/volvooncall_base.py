@@ -1,4 +1,5 @@
 import logging
+import re
 
 from datetime import timedelta, timezone
 from urllib.parse import urljoin
@@ -39,6 +40,38 @@ DEFAULT_SCAN_INTERVAL = 30
 class VolvoAPIError(Exception):
     def __init__(self, message):
         self.message = message
+
+
+def redact_sensitive(value):
+    """Return a log-safe string with credentials and identifiers redacted.
+
+    Used when logging errors that may contain a URL, header, or body carrying
+    a token, password, phone number or VIN."""
+    text = str(value)
+    sensitive_keys = (
+        "authorization|password|refreshToken|X-Token|phone|phoneNumber|vin|"
+        "vinCode|deviceid|uuid|connectorId|orderNo|tradeNo|memberId|latitude|"
+        "longitude"
+    )
+    text = re.sub(
+        rf"((?:{sensitive_keys})=)[^&\s'\"]+",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(authorization['\"]?\s*[:=]\s*['\"]?Bearer\s+)[^,'\"\s]+",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(X-Token['\"]?\s*[:=]\s*['\"]?)[^,'\"\s]+",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
 
 
 class VehicleBaseAPI:
@@ -110,7 +143,12 @@ class VehicleBaseAPI:
     async def login(self):
         now = int(time.time())
 
-        if (self._access_token_expire_at - now) >= 60 * 10:
+        # A live session is kept fresh by update_token() using the refresh
+        # token, so only fall back to a full password login when there is no
+        # usable session to refresh (first auth, or a fully expired token).
+        # This avoids unnecessary password logins and the rate-limiting they
+        # can trigger.
+        if self._refresh_token and (self._access_token_expire_at - now) > 0:
             return
 
         url = urljoin(DIGITALVOLVO_URL, "/app/iam/api/v1/auth")
@@ -121,38 +159,56 @@ class VehicleBaseAPI:
         })
 
         if not result:
-            return
+            raise VolvoAPIError("Login returned no response")
 
-        if not result["success"]:
-            return
+        if not result.get("success"):
+            raise VolvoAPIError(
+                f"Login rejected by server: {result.get('errMsg') or result.get('msg')}"
+            )
 
-        if not result["data"]["globalAccessToken"]:
-            return
+        data = result.get("data") or {}
+        if not data.get("globalAccessToken") or not data.get("accessToken"):
+            raise VolvoAPIError("Login succeeded but tokens were missing")
 
-        if not result["data"]["accessToken"]:
-            return
-
-        self._refresh_token = result["data"]["refreshToken"]
-        self._vocapi_access_token = result["data"]["globalAccessToken"]
-        self._digitalvolvo_access_token = result["data"]["accessToken"]
-        self._digitalvolvo_x_token = result["data"]["jwtToken"]
-        now = int(time.time())
-        self._access_token_expire_at = now + int(result["data"]["expiresIn"])
+        self._refresh_token = data["refreshToken"]
+        self._vocapi_access_token = data["globalAccessToken"]
+        self._digitalvolvo_access_token = data["accessToken"]
+        self._digitalvolvo_x_token = data["jwtToken"]
+        self._access_token_expire_at = int(time.time()) + int(data["expiresIn"])
 
     async def update_token(self):
         now = int(time.time())
 
+        # No usable session yet (first poll, or a prior refresh cleared it):
+        # a full password login is the only way to establish one.
+        if not self._refresh_token:
+            await self.login()
+            return
+
+        # Access token still has comfortable headroom; nothing to refresh.
         if (self._access_token_expire_at - now) >= 60 * 2:
             return
 
         url = urljoin(DIGITALVOLVO_URL, "/app/iam/api/v1/refreshToken?refreshToken=" + self._refresh_token)
 
-        result = await self.digitalvolvo_get(url, {})
-        self._refresh_token = result["data"]["refreshToken"]
-        self._vocapi_access_token = result["data"]["globalAccessToken"]
-        self._digitalvolvo_access_token = result["data"]["accessToken"]
-        self._digitalvolvo_x_token = result["data"]["jwtToken"]
-        self._access_token_expire_at = now + int(result["data"]["expiresIn"])
+        try:
+            result = await self.digitalvolvo_get(url, {})
+            data = result["data"]
+            self._refresh_token = data["refreshToken"]
+            self._vocapi_access_token = data["globalAccessToken"]
+            self._digitalvolvo_access_token = data["accessToken"]
+            self._digitalvolvo_x_token = data["jwtToken"]
+            self._access_token_expire_at = now + int(data["expiresIn"])
+        except Exception as err:
+            # The refresh token itself expired or was revoked; drop it and
+            # recover with a full password login instead of crashing the poll.
+            _LOGGER.warning(
+                "Token refresh failed, re-authenticating with password: %s",
+                redact_sensitive(err),
+            )
+            self._refresh_token = ""
+            self._access_token_expire_at = 0
+            await self.login()
 
     async def get_vehicles(self):
         url = urljoin(DIGITALVOLVO_URL, "/app/account/vehicles/api/v1/owner/listBindCar")
@@ -226,6 +282,21 @@ class VehicleBaseAPI:
             "connectorID": connector_id,
             "versions": "1",
         })
+
+    async def set_plug_and_charge(self, equipment_id, enabled: bool):
+        """Toggle plug-and-charge (即插即充: auto-start charging on plug-in) for a
+        home wallbox, identified by its ``equipmentId``."""
+        url = urljoin(DIGITALVOLVO_URL, "/app/charge-pile/plugAndCharge")
+        return await self.digitalvolvo_post(url, {}, {
+            "enabled": 1 if enabled else 0,
+            "equipmentIdList": [equipment_id],
+        })
+
+    async def sign_in(self, member_id):
+        """Daily Volvo app member check-in (签到) for the charging membership."""
+        url = urljoin(DIGITALVOLVO_URL, "/app/app/newSign/signIn")
+        result = await self.digitalvolvo_post(url, {}, {"memberId": member_id})
+        return result.get("data") if result else None
 
 
 def json_loads(s):

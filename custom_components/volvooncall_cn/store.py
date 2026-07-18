@@ -9,10 +9,15 @@ from .volvooncall_cn import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 
+# 100 disables the limit so charging behaves exactly as before (charge to full).
+CHARGE_LIMIT_DISABLED = 100
+CHARGE_LIMIT_MIN = 50
+
 
 class StoreData(TypedDict, total=False):
     """Volvo Store Data"""
     engine_duration_number: int
+    charge_limit: int
     full_charge_electric_range: int | float
     full_charge_sampled_at: str
     full_charge_sample_count: int
@@ -47,6 +52,20 @@ class VolvoStore(Store[StoreData]):
 
     async def set_engine_duration_number(self, value):
         await self.update(engine_duration_number=int(value))
+
+    def get_charge_limit(self) -> int:
+        """Persisted SoC ceiling (%). Defaults to 100 (disabled) when unset."""
+        self.data = self.data or self.default_data
+        value = self.data.get("charge_limit")
+        try:
+            limit = int(value)
+        except (TypeError, ValueError):
+            return CHARGE_LIMIT_DISABLED
+        return min(max(limit, CHARGE_LIMIT_MIN), CHARGE_LIMIT_DISABLED)
+
+    async def set_charge_limit(self, value):
+        limit = min(max(int(value), CHARGE_LIMIT_MIN), CHARGE_LIMIT_DISABLED)
+        await self.update(charge_limit=limit)
 
     async def async_capture_full_charge_range(
         self,

@@ -22,7 +22,7 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 
-from .store import VolvoStore
+from .store import VolvoStore, CHARGE_LIMIT_DISABLED
 from .volvooncall_base import DEFAULT_SCAN_INTERVAL
 from .volvooncall_cn import VehicleAPI
 from .volvooncall_cn import Vehicle
@@ -40,18 +40,24 @@ PLATFORMS = {
 
 _LOGGER = logging.getLogger(__name__)
 
-# Bundled Lovelace card (custom:volvo-car-card), served by the integration.
+# Bundled Lovelace cards, served by the integration.
 FRONTEND_PATH = Path(__file__).parent / "frontend"
 FRONTEND_URL_PATH = f"/{DOMAIN}/frontend"
 CARD_RESOURCE_PATH = f"{FRONTEND_URL_PATH}/volvo-car-card.js"
+CHARGING_CARD_RESOURCE_PATH = f"{FRONTEND_URL_PATH}/volvo-charging-card.js"
+# (filename, served resource path) for every bundled card.
+BUNDLED_CARDS = (
+    ("volvo-car-card.js", CARD_RESOURCE_PATH),
+    ("volvo-charging-card.js", CHARGING_CARD_RESOURCE_PATH),
+)
 
 
-def _read_card_version() -> str:
-    """Read CARD_VERSION from the bundled card JS, so the cache-busting resource
+def _read_card_version(filename: str) -> str:
+    """Read CARD_VERSION from a bundled card JS, so the cache-busting resource
     URL has a single source of truth (the .js file) instead of a second constant
     that silently drifts out of sync on every card change."""
     try:
-        text = (FRONTEND_PATH / "volvo-car-card.js").read_text(encoding="utf-8")
+        text = (FRONTEND_PATH / filename).read_text(encoding="utf-8")
         match = re.search(r'CARD_VERSION\s*=\s*"([^"]+)"', text)
         if match:
             return match.group(1)
@@ -60,8 +66,10 @@ def _read_card_version() -> str:
     return "0"
 
 
-async def _async_register_card_resource(hass: HomeAssistant, card_url: str) -> None:
-    """Auto-register the bundled card as a storage-mode Lovelace resource.
+async def _async_register_card_resource(
+    hass: HomeAssistant, resource_path: str, card_url: str
+) -> None:
+    """Auto-register a bundled card as a storage-mode Lovelace resource.
 
     Lovelace internals are imported lazily and every failure degrades to a log
     hint ("add the resource manually") so a Home Assistant version mismatch can
@@ -96,7 +104,7 @@ async def _async_register_card_resource(hass: HomeAssistant, card_url: str) -> N
     await resources.async_get_info()
     for item in resources.async_items() or []:
         url = item.get("url", "")
-        if url.split("?", 1)[0] != CARD_RESOURCE_PATH:
+        if url.split("?", 1)[0] != resource_path:
             continue
         # Already registered; bump the cache-busting version if it changed.
         if url != card_url:
@@ -112,14 +120,15 @@ async def _async_register_card_resource(hass: HomeAssistant, card_url: str) -> N
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Serve and register the bundled Volvo card (runs once at integration load)."""
+    """Serve and register the bundled Volvo cards (runs once at integration load)."""
     try:
         await hass.http.async_register_static_paths(
             [StaticPathConfig(FRONTEND_URL_PATH, str(FRONTEND_PATH), True)]
         )
-        version = await hass.async_add_executor_job(_read_card_version)
-        card_url = f"{CARD_RESOURCE_PATH}?v={version}"
-        await _async_register_card_resource(hass, card_url)
+        for filename, resource_path in BUNDLED_CARDS:
+            version = await hass.async_add_executor_job(_read_card_version, filename)
+            card_url = f"{resource_path}?v={version}"
+            await _async_register_card_resource(hass, resource_path, card_url)
     except Exception as err:  # pragma: no cover - never block integration setup
         _LOGGER.warning("Volvo card frontend setup failed: %s", err)
     return True
@@ -192,6 +201,14 @@ class VolvoCoordinator(DataUpdateCoordinator):
         self._consecutive_failures = 0
         self._last_failure_reason = None
 
+
+    async def async_force_refresh(self):
+        """Force an immediate data refresh, bypassing the debouncer.
+
+        Used right after a control command (charge limit, plug-and-charge,
+        home charge start/stop) so the UI reflects the new state without
+        waiting for the next scheduled poll."""
+        await self.async_refresh()
 
     async def _retry_with_backoff(self, func, max_retries=2, initial_delay=1.0):
         """Retry a function with exponential backoff."""
@@ -271,6 +288,31 @@ class VolvoCoordinator(DataUpdateCoordinator):
                             _LOGGER.warning(
                                 "Full-charge range capture failed for %s: %s", vin, err
                             )
+
+                    # Enforce the persisted charge limit: once the battery
+                    # reaches the ceiling, stop the active home-charge session.
+                    # A limit of 100 (CHARGE_LIMIT_DISABLED) means "no limit".
+                    try:
+                        if getattr(vehicle, "has_home_pile", False):
+                            limit = store_data.get_charge_limit()
+                            level = vehicle.battery_charge_level
+                            if (
+                                limit is not None
+                                and limit < CHARGE_LIMIT_DISABLED
+                                and getattr(vehicle, "home_pile_charging", False)
+                                and level is not None
+                                and float(level) >= limit
+                            ):
+                                _LOGGER.info(
+                                    "Charge limit %s%% reached for %s (%.0f%%); "
+                                    "stopping home charge",
+                                    limit, vin, float(level),
+                                )
+                                await vehicle.home_pile_charge_stop()
+                    except Exception as err:
+                        _LOGGER.warning(
+                            "Charge-limit auto-stop failed for %s: %s", vin, err
+                        )
 
                     store_datas.append(store_data)
 
@@ -474,6 +516,13 @@ metaMap = {
         "unit": "Minute",
         "entity_id": "engine_duration",
     },
+    "charge_limit_number": {
+        "name": "Charge Limit",
+        "device_class": None,
+        "icon": "mdi:battery-charging-90",
+        "unit": "%",
+        "entity_id": "charge_limit",
+    },
     "engine_switch": {
         "name": "Engine Remote control",
         "device_class": None,
@@ -487,6 +536,13 @@ metaMap = {
         "icon": "mdi:bugle",
         "unit": "",
         "entity_id": "honk",
+    },
+    "app_sign_in_button": {
+        "name": "App Sign In",
+        "device_class": None,
+        "icon": "mdi:calendar-check",
+        "unit": "",
+        "entity_id": "app_sign_in",
     },
     "tail_gate_switch": {
         "name": "Tailgate control",
@@ -515,6 +571,13 @@ metaMap = {
         "icon": "mdi:ev-station",
         "unit": "",
         "entity_id": "charging",
+    },
+    "plug_and_charge_switch": {
+        "name": "Plug and Charge",
+        "device_class": None,
+        "icon": "mdi:ev-plug-type2",
+        "unit": "",
+        "entity_id": "plug_and_charge",
     },
     "service_warning_msg": {
         "name": "Service Warning Message",
@@ -649,6 +712,30 @@ metaMap = {
         "entity_id": "full_charge_electric_range",
         "state_class": "measurement",
     },
+    "charging_voltage": {
+        "name": "Charging Voltage",
+        "device_class": "voltage",
+        "icon": "mdi:sine-wave",
+        "unit": "V",
+        "entity_id": "charging_voltage",
+        "state_class": "measurement",
+    },
+    "charging_current": {
+        "name": "Charging Current",
+        "device_class": "current",
+        "icon": "mdi:current-ac",
+        "unit": "A",
+        "entity_id": "charging_current",
+        "state_class": "measurement",
+    },
+    "charging_session_energy": {
+        "name": "Charging Session Energy",
+        "device_class": "energy",
+        "icon": "mdi:lightning-bolt",
+        "unit": "kWh",
+        "entity_id": "charging_session_energy",
+        "state_class": "total_increasing",
+    },
     "charger_connected": {
         "name": "Charger Connected",
         "device_class": "plug",
@@ -730,7 +817,11 @@ class VolvoEntity(CoordinatorEntity):
         super().__init__(coordinator, context=idx)
         self.idx = idx
         self.metaMapKey = metaMapKey
-        self.entity_id = f"{platform}.{self.coordinator.data[self.idx].vin}_{metaMap[self.metaMapKey]['entity_id']}"
+        # Lowercase the VIN: HA registers entity IDs lowercased anyway, so this
+        # produces the same IDs (no rename) while satisfying HA's entity-ID
+        # validation (an uppercase VIN triggers an "invalid entity ID" warning).
+        vin = self.coordinator.data[self.idx].vin.lower()
+        self.entity_id = f"{platform}.{vin}_{metaMap[self.metaMapKey]['entity_id']}"
 
     @property
     def icon(self):
