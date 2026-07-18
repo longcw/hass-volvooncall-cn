@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.3.2";
+const CARD_VERSION = "2.7.1";
 
 const MODEL_ASSETS = {
   s90: new URL("./assets/car-s90-black-card.webp", import.meta.url).href,
@@ -31,7 +31,19 @@ const ENTITY_DEFINITIONS = {
   charger_connection: ["binary_sensor", "charger_connected"],
   charging_power: ["sensor", "charging_power"],
   charging_time: ["sensor", "estimated_charging_time"],
+  distance_30d: ["sensor", "distance_last_30d"],
+  energy_30d: ["sensor", "energy_last_30d"],
   odometer: ["sensor", "odometer"],
+  // 车况 · 警告 (vehicle-condition warnings)
+  service_warning: ["binary_sensor", "service_warning"],
+  oil_warning: ["binary_sensor", "oil_level_warning"],
+  coolant_warning: ["binary_sensor", "engine_coolant_level_warning"],
+  brake_fluid_warning: ["binary_sensor", "brake_fluid_level_warning"],
+  washer_warning: ["binary_sensor", "washer_fluid_level_warning"],
+  tyre_fl_warning: ["binary_sensor", "front_left_tyre_pressure_warning"],
+  tyre_fr_warning: ["binary_sensor", "front_right_tyre_pressure_warning"],
+  tyre_rl_warning: ["binary_sensor", "rear_left_tyre_pressure_warning"],
+  tyre_rr_warning: ["binary_sensor", "rear_right_tyre_pressure_warning"],
   tm_distance: ["sensor", "trip_meter_tm"],
   tm_fuel_consumption: ["sensor", "fuel_average_consumption_liters_per_100_km"],
   tm_energy_consumption: ["sensor", "energy_consumption"],
@@ -47,6 +59,19 @@ const ENTITY_DEFINITIONS = {
   flash: ["button", "flash"],
   honk_flash: ["button", "honk_and_flash"],
 };
+
+// 车况 · 警告 items shown in the vehicle-condition detail dialog.
+const CONDITION_ITEMS = [
+  ["service_warning", "保养提醒"],
+  ["oil_warning", "机油液位"],
+  ["coolant_warning", "冷却液液位"],
+  ["brake_fluid_warning", "刹车油液位"],
+  ["washer_warning", "玻璃水液位"],
+  ["tyre_fl_warning", "左前胎压"],
+  ["tyre_fr_warning", "右前胎压"],
+  ["tyre_rl_warning", "左后胎压"],
+  ["tyre_rr_warning", "右后胎压"],
+];
 
 const BODY_PARTS = [
   ["hood", "引擎盖", "hood"],
@@ -176,7 +201,7 @@ class VolvoCarCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (this.shadowRoot?.querySelector(".confirm-dialog[open]")) return;
+    if (this.shadowRoot?.querySelector(".confirm-dialog[open], .detail-dialog[open]")) return;
     const signature = this._stateSignature(hass);
     if (signature === this._lastStateSignature && this.shadowRoot) return;
     this._lastStateSignature = signature;
@@ -319,6 +344,7 @@ class VolvoCarCard extends HTMLElement {
     const modelName = MODEL_LABELS[this._config.model] || this._config.model || "Volvo";
     const title = this._config.name || modelName;
     const openParts = this._openParts();
+    const conditionWarn = CONDITION_ITEMS.some(([key]) => this._isOn(key));
     const isLocked = this._state("lock")?.state === "locked";
     const lockPending = this._pendingActions.has("lock");
     const connection = String(this._state("connection")?.state || "").toLowerCase();
@@ -357,7 +383,7 @@ class VolvoCarCard extends HTMLElement {
                   aria-busy="${lockPending}"
                   aria-label="${isLocked ? "解锁车辆" : "锁定车辆"}">
             <ha-icon class="${lockPending ? "pending-icon" : ""}" icon="${lockPending ? "mdi:loading" : isLocked ? "mdi:lock" : "mdi:lock-open-variant"}"></ha-icon>
-            <span>${lockPending ? "发送中" : isLocked ? "已锁定" : "未锁定"}</span>
+            <span>${isLocked ? "已锁定" : "未锁定"}</span>
           </button>
         </div>
 
@@ -377,10 +403,14 @@ class VolvoCarCard extends HTMLElement {
             </div>
           </div>
           <div class="state-panel">
-            <div class="state-heading">
-              <span>车辆状态</span>
-              <small class="${openParts.length ? "warn" : "ok"}">${openParts.length ? "请检查" : "状态正常"}</small>
-            </div>
+            <button class="state-row ${conditionWarn ? "warn" : "ok"}" data-detail="condition" aria-label="车况警告明细">
+              <span class="row-label"><ha-icon icon="mdi:car-info"></ha-icon><span>车辆状态</span></span>
+              <strong>${conditionWarn ? "请检查" : "正常"}</strong>
+            </button>
+            <button class="state-row ${openParts.length || !isLocked ? "warn" : "ok"}" data-detail="body" aria-label="门窗与舱盖明细">
+              <span class="row-label"><ha-icon icon="mdi:car-door-lock"></ha-icon><span>门窗与舱盖</span></span>
+              <strong>${openParts.length ? `${openParts.length} 项需检查` : isLocked ? "全部关闭" : "已解锁"}</strong>
+            </button>
             ${this._stateRow("engine", "发动机", this._isOn("engine") ? "运行中" : "关闭", this._isOn("engine") ? "warn" : "", "mdi:engine-outline")}
             ${
               this._isAvailable("charging_status")
@@ -388,22 +418,15 @@ class VolvoCarCard extends HTMLElement {
                 : ""
             }
             ${
-              this._isAvailable("full_charge_range")
-                ? this._stateRow("full_charge_range", "最近满电", this._displayState("full_charge_range"), "charge", "mdi:map-marker-distance")
+              this._state("distance_30d")
+                ? this._stateRow("distance_30d", "近 30 天里程", this._displayState("distance_30d"), "", "mdi:road-variant")
                 : ""
             }
-            <div class="open-list">
-              <span><b>门窗与舱盖</b><small class="${openParts.length ? "warn" : "ok"}">${openParts.length ? `${openParts.length} 项需检查` : "全部关闭"}</small></span>
-              <div>
-                ${
-                  openParts.length
-                    ? openParts
-                        .map(([key, label]) => `<button data-more-info="${this._escape(this._entityId(key))}">${label}</button>`)
-                        .join("")
-                    : ""
-                }
-              </div>
-            </div>
+            ${
+              this._isAvailable("energy_30d")
+                ? this._stateRow("energy_30d", "近 30 天充电", this._displayState("energy_30d"), "charge", "mdi:lightning-bolt")
+                : ""
+            }
           </div>
         </div>
 
@@ -455,6 +478,7 @@ class VolvoCarCard extends HTMLElement {
             <button class="dialog-confirm">确认</button>
           </div>
         </dialog>
+        ${this._detailDialogs()}
         <div class="feedback" role="status" aria-live="polite" hidden>
           <ha-icon icon="mdi:check-circle"></ha-icon><span></span>
         </div>
@@ -515,6 +539,48 @@ class VolvoCarCard extends HTMLElement {
             </button>`;
   }
 
+  _detailRow(entityId, label, value, tone) {
+    return `<button class="detail-row" data-detail-entity="${this._escape(entityId || "")}">
+              <span>${label}</span><strong class="${tone}">${this._escape(value)}</strong>
+            </button>`;
+  }
+
+  _detailDialogs() {
+    // 车况 · 警告 — vehicle-condition warnings (service / fluids / tyres).
+    const conditionRows = CONDITION_ITEMS.map(([key, label]) => {
+      const warn = this._isOn(key);
+      return this._detailRow(
+        this._entityId(key), label, warn ? "警告" : "正常", warn ? "warn" : "ok",
+      );
+    }).join("");
+    // 车身 · 门窗 — lock + doors / windows / hood / sunroof / tailgate.
+    const isLocked = this._state("lock")?.state === "locked";
+    let bodyRows = this._detailRow(
+      this._entityId("lock"), "车锁", isLocked ? "已锁定" : "未锁定", isLocked ? "ok" : "warn",
+    );
+    bodyRows += BODY_PARTS.map(([key, label]) => {
+      const open = this._isOn(key);
+      return this._detailRow(
+        this._entityId(key), label, open ? "开启" : "关闭", open ? "warn" : "ok",
+      );
+    }).join("");
+    return `
+      <dialog class="detail-dialog" data-dialog="condition">
+        <div class="detail-head">
+          <div><ha-icon icon="mdi:car-wrench"></ha-icon><span>车况 · 警告</span></div>
+          <button class="detail-close" aria-label="关闭"><ha-icon icon="mdi:close"></ha-icon></button>
+        </div>
+        <div class="detail-list">${conditionRows}</div>
+      </dialog>
+      <dialog class="detail-dialog" data-dialog="body">
+        <div class="detail-head">
+          <div><ha-icon icon="mdi:car-door-lock"></ha-icon><span>车身 · 门窗</span></div>
+          <button class="detail-close" aria-label="关闭"><ha-icon icon="mdi:close"></ha-icon></button>
+        </div>
+        <div class="detail-list">${bodyRows}</div>
+      </dialog>`;
+  }
+
   _tripRow(title, rows) {
     return `
       <div class="trip-row">
@@ -556,7 +622,7 @@ class VolvoCarCard extends HTMLElement {
               aria-busy="${pending}"
               aria-label="${dynamicLabel}">
         <span class="control-icon"><ha-icon class="${pending ? "pending-icon" : ""}" icon="${pending ? "mdi:loading" : icon}"></ha-icon></span>
-        <span>${pending ? "发送中" : dynamicLabel}</span>
+        <span>${dynamicLabel}</span>
       </button>`;
   }
 
@@ -588,6 +654,37 @@ class VolvoCarCard extends HTMLElement {
     });
     this.shadowRoot.querySelectorAll("[data-action]").forEach((element) => {
       element.addEventListener("click", () => this._runAction(element.dataset.action));
+    });
+    // Two detail dialogs: 车辆状态 -> 车况警告 (condition), 门窗与舱盖 -> 车身门窗 (body).
+    this.shadowRoot.querySelectorAll("[data-detail]").forEach((element) => {
+      element.addEventListener("click", () => {
+        const which = element.dataset.detail;
+        this.shadowRoot
+          .querySelector(`.detail-dialog[data-dialog="${which}"]`)
+          ?.showModal?.();
+      });
+    });
+    this.shadowRoot.querySelectorAll(".detail-dialog").forEach((dlg) => {
+      dlg.querySelector(".detail-close")?.addEventListener("click", () => dlg.close());
+      // Click on the backdrop (the dialog element itself) closes it.
+      dlg.addEventListener("click", (ev) => {
+        if (ev.target === dlg) dlg.close();
+      });
+    });
+    // A component row inside a dialog opens its HA more-info.
+    this.shadowRoot.querySelectorAll("[data-detail-entity]").forEach((element) => {
+      element.addEventListener("click", () => {
+        const entityId = element.dataset.detailEntity;
+        if (!entityId || !this._hass?.states?.[entityId]) return;
+        this.shadowRoot.querySelectorAll(".detail-dialog[open]").forEach((d) => d.close());
+        this.dispatchEvent(
+          new CustomEvent("hass-more-info", {
+            detail: { entityId },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      });
     });
   }
 
@@ -985,19 +1082,6 @@ class VolvoCarCard extends HTMLElement {
         min-width: 0;
         border-top: 1px solid var(--voc-line);
       }
-      .state-heading {
-        min-height: 42px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        border-bottom: 1px solid var(--voc-line);
-      }
-      .state-heading > span { font-size: 11px; font-weight: 600; }
-      .state-heading small { font-size: 9px; }
-      .state-heading small.ok { color: var(--voc-success); }
-      .state-heading small.warn { color: var(--voc-danger); }
-      .state-heading small::before { display: inline-block; width: 5px; height: 5px; margin-right: 4px; border-radius: 50%; background: currentColor; content: ""; vertical-align: 1px; }
       .state-row {
         width: 100%;
         min-height: 40px;
@@ -1031,24 +1115,8 @@ class VolvoCarCard extends HTMLElement {
       .state-row.charge strong { color: var(--voc-accent); }
       .state-row.charge .row-label ha-icon { color: var(--voc-accent); }
       .state-row.missing { opacity: .45; cursor: default; }
-      .open-list { padding: 11px 0 4px; }
-      .open-list > span { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 7px; color: var(--voc-secondary); font-size: 9px; }
-      .open-list > span b { color: var(--voc-text); font-size: 11px; font-weight: 600; }
-      .open-list > span small { font-size: 9px; white-space: nowrap; }
-      .open-list > span small.warn { color: var(--voc-danger); }
-      .open-list > span small.ok { color: var(--voc-success); }
-      .open-list > div { display: flex; flex-wrap: wrap; gap: 5px; }
-      .open-list button,
-      .open-list em {
-        border: 0;
-        border-radius: 8px;
-        padding: 4px 7px;
-        background: color-mix(in srgb, var(--voc-warning) 14%, var(--voc-bg));
-        color: var(--voc-danger);
-        font-size: 10px;
-        font-style: normal;
-      }
-      .open-list em { background: var(--voc-surface); color: var(--voc-success); }
+      .state-row.ok strong { color: var(--voc-success); }
+      .state-row.ok .row-label ha-icon { color: var(--voc-success); }
       .statistics { border-top: 1px solid var(--voc-line); padding: 15px 22px 17px; }
       .section-title {
         display: flex;
@@ -1152,6 +1220,28 @@ class VolvoCarCard extends HTMLElement {
       .dialog-actions button { min-height: 42px; border: 0; border-radius: 10px; cursor: pointer; }
       .dialog-cancel { background: var(--voc-surface); color: var(--voc-text); }
       .dialog-confirm { background: var(--voc-blue); color: #fff; }
+      .detail-dialog {
+        width: min(88vw, 340px);
+        border: 0;
+        border-radius: 14px;
+        padding: 16px 18px 18px;
+        background: var(--voc-bg);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, .32);
+        color: var(--voc-text);
+      }
+      .detail-dialog[open] { animation: voc-dialog-in .2s cubic-bezier(.2, .8, .2, 1) both; }
+      .detail-dialog::backdrop { background: rgba(0, 0, 0, .48); backdrop-filter: blur(3px); }
+      .detail-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+      .detail-head > div { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; }
+      .detail-head ha-icon { --mdc-icon-size: 18px; color: var(--voc-blue); }
+      .detail-close { border: 0; background: var(--voc-surface); color: var(--voc-secondary); width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; }
+      .detail-list { display: flex; flex-direction: column; }
+      .detail-row { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 0; border-bottom: 1px solid var(--voc-line); background: transparent; padding: 11px 2px; cursor: pointer; color: var(--voc-secondary); font-size: 12px; }
+      .detail-row:last-child { border-bottom: 0; }
+      .detail-row:hover { background: color-mix(in srgb, var(--voc-blue) 6%, transparent); }
+      .detail-row strong { font-size: 12px; font-weight: 600; color: var(--voc-text); }
+      .detail-row strong.ok { color: var(--voc-success); }
+      .detail-row strong.warn { color: var(--voc-danger); }
       .feedback {
         position: absolute;
         z-index: 8;
@@ -1186,12 +1276,12 @@ class VolvoCarCard extends HTMLElement {
       @media (hover: hover) {
         .range-tile:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--voc-blue) 24%, var(--voc-line)); box-shadow: 0 10px 22px rgba(0, 0, 0, .07); }
         .lock-pill:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 8px 16px rgba(0, 0, 0, .12); }
-        .state-row:not(.missing):hover, .trip-row button:hover { background: color-mix(in srgb, var(--voc-blue) 5%, transparent); }
+        .state-row:not(.missing):not(.static):hover, .trip-row button:hover { background: color-mix(in srgb, var(--voc-blue) 5%, transparent); }
         .control:not(:disabled):hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--voc-blue) 20%, var(--voc-line)); box-shadow: 0 10px 20px rgba(0, 0, 0, .08); }
         .control:not(:disabled):hover .control-icon { transform: scale(1.04); }
       }
       .range-tile:active, .lock-pill:not(:disabled):active, .control:not(:disabled):active { transform: scale(.98); }
-      .state-heading small.warn::before, .connection.offline i { animation: voc-status-pulse 1.7s ease-in-out infinite; }
+      .connection.offline i { animation: voc-status-pulse 1.7s ease-in-out infinite; }
       @keyframes voc-progress-in { from { transform: scaleX(0); } to { transform: scaleX(1); } }
       @keyframes voc-car-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
       @keyframes voc-warning-in { from { opacity: 0; } to { opacity: 1; } }

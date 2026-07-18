@@ -24,8 +24,9 @@ async def async_setup_entry(
         buttons.append(VolvoFlashButton(coordinator, idx, "flash_button"))
         buttons.append(VolvoHonkFlashButton(coordinator, idx, "honk_flash_button"))
         buttons.append(VolvoHonkButton(coordinator, idx, "honk_button"))
-        # Daily charging-membership check-in; needs a bound home pile (member id).
-        if ent.get("has_home_pile"):
+        # Daily charging-membership check-in; only for electric cars with a
+        # bound home pile (account-level pile guard).
+        if ent.get("has_battery") and ent.get("has_home_pile"):
             buttons.append(VolvoSignInButton(coordinator, idx, "app_sign_in_button"))
 
     async_add_entities(buttons)

@@ -28,7 +28,8 @@ async def async_setup_entry(
             switchs.append(VolvoTailgateSwitch(coordinator, idx, "tail_gate_switch"))
             switchs.append(VolvoSunroofSwitch(coordinator, idx, "sunroof_switch"))
             switchs.append(VolvoClimatizationSwitch(coordinator, idx, "climatization_switch"))
-        if ent.get("has_home_pile"):
+        # Wallbox controls only for electric cars (account-level pile guard).
+        if ent.get("has_battery") and ent.get("has_home_pile"):
             switchs.append(VolvoChargingSwitch(coordinator, idx, "charging_switch"))
             switchs.append(VolvoPlugAndChargeSwitch(coordinator, idx, "plug_and_charge_switch"))
 

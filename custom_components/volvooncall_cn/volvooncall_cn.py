@@ -424,6 +424,22 @@ def _derive_charging_status(
     return "connected"
 
 
+def _parse_record_dt(value):
+    """Parse a charge-record timestamp ('2026-07-16 00:05:00') to naive datetime."""
+    if not value:
+        return None
+    text = str(value).strip().replace("T", " ")
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
+        "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d",
+    ):
+        try:
+            return dt.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _parse_duration_minutes(value):
     """Parse a charge-session duration into whole minutes.
 
@@ -558,6 +574,12 @@ class Vehicle(object):
         # the charging_status sensor for the charging card's statistics section.
         self.last_charge_order = None
         self.charge_pile_address = None
+        # Trailing-30-day + monthly stats: distance (from odometer statistics,
+        # filled by the coordinator) and charged energy (from charge records).
+        self.distance_last_30d = None
+        self.distance_monthly = []
+        self.energy_last_30d = None
+        self.energy_monthly = []
 
         # Trip computer: TM = manual trip meter, AT = automatic trip meter
         self.trip_meter_manual = None
@@ -1016,6 +1038,33 @@ class Vehicle(object):
                 return
             records = await self._api.get_home_pile_records(pile.get("connectorId"))
             latest = records[0] if records else {}
+
+            # Aggregate charge-session energy: trailing-30-day total + per-month
+            # history (for the charging card). Records are past sessions with
+            # chargeUsePower (kWh) and startTime.
+            energy_30d = 0.0
+            energy_by_month = {}
+            cutoff = dt.now() - timedelta(days=30)
+            for rec in records or []:
+                try:
+                    session_kwh = float(rec.get("chargeUsePower") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if session_kwh <= 0:
+                    continue
+                rec_dt = _parse_record_dt(rec.get("startTime"))
+                if rec_dt is None:
+                    continue
+                month_key = rec_dt.strftime("%Y-%m")
+                energy_by_month[month_key] = (
+                    energy_by_month.get(month_key, 0.0) + session_kwh
+                )
+                if rec_dt >= cutoff:
+                    energy_30d += session_kwh
+            energy_monthly = [
+                {"month": k, "kwh": round(v, 2)}
+                for k, v in sorted(energy_by_month.items())
+            ][-12:]
             try:
                 last_energy = round(float(latest.get("chargeUsePower") or 0), 2)
             except (TypeError, ValueError):
@@ -1102,6 +1151,8 @@ class Vehicle(object):
                 "plug_and_charge_enabled": plug_and_charge_enabled,
                 "last_charge_order": last_charge_order,
                 "charge_pile_address": pile.get("address"),
+                "energy_last_30d": round(energy_30d, 2) if records else None,
+                "energy_monthly": energy_monthly,
                 "home_pile_raw": {
                     "connector_id": pile.get("connectorId"),
                     "connector_status": connector_status,

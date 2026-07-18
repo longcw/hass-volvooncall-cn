@@ -1,4 +1,4 @@
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.2.2";
 
 // Remapped to hass-volvooncall-cn (longcw fork) entity IDs.
 const ENTITY_DEFINITIONS = {
@@ -18,6 +18,8 @@ const ENTITY_DEFINITIONS = {
   home_charge: ["switch", "charging"],
   plug_and_charge: ["switch", "plug_and_charge"],
   charge_limit: ["number", "charge_limit"],
+  distance_30d: ["sensor", "distance_last_30d"],
+  energy_30d: ["sensor", "energy_last_30d"],
 };
 
 const CHARGING_STATES = new Set(["charging", "smart_charging", "starting"]);
@@ -346,6 +348,7 @@ class VolvoChargingCard extends HTMLElement {
 
         ${this._config.show_controls === false ? "" : this._controlsSection(limit, limitEnabled, limitReached)}
         ${this._config.show_statistics === false ? "" : this._statisticsSection()}
+        ${this._config.show_statistics === false ? "" : this._monthlyStatsSection()}
 
         <dialog class="confirm-dialog">
           <div class="dialog-icon"><ha-icon icon="mdi:ev-station"></ha-icon></div>
@@ -423,14 +426,14 @@ class VolvoChargingCard extends HTMLElement {
                   ${homeAvailable && !homePending ? "" : "disabled"}
                   aria-busy="${homePending}">
             <span class="control-icon"><ha-icon class="${homePending ? "pending-icon" : ""}" icon="${homePending ? "mdi:loading" : homeOn ? "mdi:stop-circle-outline" : "mdi:play-circle-outline"}"></ha-icon></span>
-            <span>${homePending ? "发送中" : homeOn ? "停止家充" : "开始家充"}</span>
+            <span>${homeOn ? "停止家充" : "开始家充"}</span>
           </button>
           <button class="control ${pncOn ? "active" : ""} ${pncPending ? "pending" : ""}"
                   data-action="plug_and_charge"
                   ${pncAvailable && !pncPending ? "" : "disabled"}
                   aria-busy="${pncPending}">
             <span class="control-icon"><ha-icon class="${pncPending ? "pending-icon" : ""}" icon="${pncPending ? "mdi:loading" : "mdi:power-plug-battery"}"></ha-icon></span>
-            <span>${pncPending ? "发送中" : pncOn ? "即插即充 开" : "即插即充 关"}</span>
+            <span>${pncOn ? "即插即充 开" : "即插即充 关"}</span>
           </button>
         </div>
       </div>`;
@@ -438,7 +441,6 @@ class VolvoChargingCard extends HTMLElement {
 
   _statisticsSection() {
     const order = this._lastChargeOrder();
-    const pile = this._pileInfo();
     const rows = [];
 
     if (order) {
@@ -491,17 +493,6 @@ class VolvoChargingCard extends HTMLElement {
         ),
       );
     }
-    if (pile.name) {
-      rows.push(
-        this._statRow(
-          "mdi:ev-station",
-          "充电桩",
-          `${pile.name}${pile.address ? ` · ${pile.address}` : ""}`,
-          "charger_connection",
-        ),
-      );
-    }
-
     return `
       <div class="statistics">
         <div class="section-title">
@@ -511,6 +502,49 @@ class VolvoChargingCard extends HTMLElement {
         <div class="stat-list">
           ${rows.join("") || `<div class="stat-empty">暂无充电统计数据</div>`}
         </div>
+      </div>`;
+  }
+
+  _monthlyStatsSection() {
+    const distMonthly = this._isAvailable("distance_30d")
+      ? this._state("distance_30d")?.attributes?.monthly || []
+      : [];
+    const energyMonthly = this._isAvailable("energy_30d")
+      ? this._state("energy_30d")?.attributes?.monthly || []
+      : [];
+    if (!distMonthly.length && !energyMonthly.length) return "";
+    return `
+      <div class="monthly-stats">
+        <div class="section-title">
+          <div><ha-icon icon="mdi:chart-bar"></ha-icon><span>里程与充电统计</span></div>
+          <small>近 12 个月</small>
+        </div>
+        ${this._histogram("每月里程", distMonthly, "km", "dist")}
+        ${this._histogram("每月充电量", energyMonthly, "kWh", "energy")}
+      </div>`;
+  }
+
+  _histogram(label, monthly, unit, cls) {
+    if (!monthly.length) return "";
+    const key = unit === "km" ? "km" : "kwh";
+    const values = monthly.map((m) => Number(m[key]) || 0);
+    const max = Math.max(...values, 1);
+    const bars = monthly
+      .map((m) => {
+        const value = Number(m[key]) || 0;
+        const height = value > 0 ? Math.max(4, Math.round((value / max) * 100)) : 0;
+        const mm = String(m.month || "").slice(5).replace(/^0/, "");
+        return `<div class="hist-bar" title="${this._escape(m.month)}: ${value} ${unit}">
+          <span class="hist-value">${value ? value.toFixed(unit === "km" ? 0 : 1) : ""}</span>
+          <span class="hist-fill ${cls}" style="height:${height}%"></span>
+          <small>${mm}月</small>
+        </div>`;
+      })
+      .join("");
+    return `
+      <div class="hist">
+        <div class="hist-head"><span>${label}</span><small>${unit}</small></div>
+        <div class="hist-bars">${bars}</div>
       </div>`;
   }
 
@@ -1002,6 +1036,19 @@ class VolvoChargingCard extends HTMLElement {
         white-space: nowrap;
       }
       .stat-empty { min-height: 52px; display: grid; place-items: center; color: var(--voc-secondary); font-size: 10px; }
+      .monthly-stats { border-top: 1px solid var(--voc-line); padding: 14px 22px 18px; }
+      .hist { margin-top: 10px; border: 1px solid var(--voc-line); border-radius: 13px; background: var(--voc-surface); padding: 12px 14px 10px; }
+      .hist-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 9px; color: var(--voc-secondary); font-size: 10px; }
+      .hist-head span { color: var(--voc-text); font-weight: 600; }
+      .hist-bars { display: flex; align-items: flex-end; gap: 4px; height: 84px; }
+      .hist-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 3px; }
+      .hist-value { font-size: 7px; color: var(--voc-secondary); line-height: 1; height: 8px; white-space: nowrap; }
+      .hist-fill { width: 100%; max-width: 22px; min-height: 2px; border-radius: 5px 5px 2px 2px; animation: voc-bar-in .5s cubic-bezier(.2,.7,.2,1) both; transform-origin: bottom; }
+      @keyframes voc-bar-in { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+      @media (prefers-reduced-motion: reduce) { .hist-fill { animation: none; } }
+      .hist-fill.dist { background: var(--voc-blue); }
+      .hist-fill.energy { background: var(--voc-success); }
+      .hist-bar small { color: var(--voc-secondary); font-size: 8px; white-space: nowrap; }
       .confirm-dialog {
         width: min(88vw, 330px);
         border: 0;
@@ -1071,7 +1118,7 @@ class VolvoChargingCard extends HTMLElement {
         .ring-text strong { font-size: 19px; }
         .battery-band { margin: 0 16px; }
         .telemetry { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-inline: 16px; }
-        .controls-wrap, .statistics { padding-inline: 16px; }
+        .controls-wrap, .statistics, .monthly-stats { padding-inline: 16px; }
       }
       @container (max-width: 340px) {
         .telemetry { grid-template-columns: repeat(2, minmax(0, 1fr)); }

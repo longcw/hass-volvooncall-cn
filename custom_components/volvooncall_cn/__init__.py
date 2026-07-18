@@ -23,6 +23,7 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 
 from .store import VolvoStore, CHARGE_LIMIT_DISABLED
+from homeassistant.util import dt as dt_util
 from .volvooncall_base import DEFAULT_SCAN_INTERVAL
 from .volvooncall_cn import VehicleAPI
 from .volvooncall_cn import Vehicle
@@ -202,6 +203,53 @@ class VolvoCoordinator(DataUpdateCoordinator):
         self._last_failure_reason = None
 
 
+    async def _seed_odometer_from_stats(self, statistic_id):
+        """Ascending [(date, km)] from recent clean daily odometer statistics.
+
+        Only recent daily statistics are used (they're reliable); the monthly
+        long-term aggregation is skipped because total_increasing accounting can
+        corrupt it. Used once per VIN to backfill the store so the trailing-30d
+        figure and current-month bar aren't blank on day one."""
+        try:
+            from homeassistant.components.recorder import get_instance
+            from homeassistant.components.recorder.statistics import (
+                statistics_during_period,
+            )
+        except Exception:
+            return []
+        start = dt_util.utcnow() - timedelta(days=45)
+
+        def _query():
+            return statistics_during_period(
+                self.hass, start, None, {statistic_id}, "day", None, {"state"}
+            )
+
+        try:
+            raw = await get_instance(self.hass).async_add_executor_job(_query)
+        except Exception as err:
+            _LOGGER.debug("Odometer seed query failed for %s: %s", statistic_id, err)
+            return []
+
+        points = []
+        prev = None
+        for row in (raw or {}).get(statistic_id) or []:
+            try:
+                km = float(row.get("state"))
+            except (TypeError, ValueError):
+                continue
+            if km <= 0 or (prev is not None and km < prev):
+                continue  # skip zero / backward glitches
+            start_ts = row.get("start")
+            if isinstance(start_ts, (int, float)):
+                day = dt_util.as_local(dt_util.utc_from_timestamp(start_ts)).date()
+            elif start_ts is not None:
+                day = dt_util.as_local(start_ts).date()
+            else:
+                continue
+            points.append((day, km))
+            prev = km
+        return points
+
     async def async_force_refresh(self):
         """Force an immediate data refresh, bypassing the debouncer.
 
@@ -288,6 +336,24 @@ class VolvoCoordinator(DataUpdateCoordinator):
                             _LOGGER.warning(
                                 "Full-charge range capture failed for %s: %s", vin, err
                             )
+
+                    # Trailing-30-day + monthly driving distance from validated
+                    # odometer snapshots kept in the store (forward-only).
+                    try:
+                        odo = getattr(vehicle, "odo_meter", None)
+                        now_local = dt_util.now()
+                        # One-time backfill from clean recent daily statistics.
+                        if not (store_data.data or {}).get("odometer_seeded"):
+                            seed = await self._seed_odometer_from_stats(
+                                f"sensor.{vin.lower()}_odometer"
+                            )
+                            await store_data.seed_odometer(seed)
+                        await store_data.record_odometer(odo, now_local)
+                        dstats = store_data.get_distance_stats(odo, now_local)
+                        vehicle.distance_last_30d = dstats.get("last_30d")
+                        vehicle.distance_monthly = dstats.get("monthly") or []
+                    except Exception as err:
+                        _LOGGER.debug("Distance stats failed for %s: %s", vin, err)
 
                     # Enforce the persisted charge limit: once the battery
                     # reaches the ceiling, stop the active home-charge session.
@@ -807,6 +873,14 @@ metaMap = {
     "distance_to_maintenance": {
         "name": "Distance to Maintenance", "device_class": "distance", "icon": "mdi:wrench-clock",
         "unit": "km", "entity_id": "distance_to_maintenance", "state_class": "measurement",
+    },
+    "distance_last_30d": {
+        "name": "Distance (30 days)", "device_class": "distance", "icon": "mdi:map-marker-distance",
+        "unit": "km", "entity_id": "distance_last_30d", "state_class": "measurement",
+    },
+    "energy_last_30d": {
+        "name": "Charged Energy (30 days)", "device_class": None, "icon": "mdi:lightning-bolt",
+        "unit": "kWh", "entity_id": "energy_last_30d",
     },
 }
 

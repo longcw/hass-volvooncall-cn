@@ -38,6 +38,8 @@ async def async_setup_entry(
         entities.append(VolvoSensor(coordinator, idx, "avg_speed_since_charge"))
         entities.append(VolvoSensor(coordinator, idx, "next_maintenance_km"))
         entities.append(VolvoSensor(coordinator, idx, "distance_to_maintenance"))
+        # Trailing-30-day distance + monthly history (from odometer statistics).
+        entities.append(VolvoStatSensor(coordinator, idx, "distance_last_30d", "distance_monthly"))
         entities.append(VolvoSensor(coordinator, idx, "service_warning_msg"))
         entities.append(VolvoConnectionStatusSensor(coordinator, idx, "connection_status"))
         # entities.append(VolvoSensor(coordinator, idx, "fuel_amount_level"))
@@ -52,14 +54,22 @@ async def async_setup_entry(
             entities.append(VolvoSensor(coordinator, idx, "estimated_charging_time"))
             entities.append(VolvoFullChargeRangeSensor(coordinator, idx, "full_charge_electric_range"))
 
-        # Home wallbox (家充桩) sensors only if a Volvo-brand pile is bound.
-        if getattr(coordinator.data[idx], "has_home_pile", False):
+        # Home wallbox (家充桩) sensors — only for electric cars. The wallbox is
+        # bound to the ACCOUNT, so get_home_pile returns it for every VIN; without
+        # the has_battery guard a fuel car on the same account would show the EV's
+        # charging data.
+        if (
+            getattr(coordinator.data[idx], "has_battery", False)
+            and getattr(coordinator.data[idx], "has_home_pile", False)
+        ):
             entities.append(VolvoHomePileSensor(coordinator, idx, "home_pile_connector_status"))
             entities.append(VolvoSensor(coordinator, idx, "home_pile_last_energy"))
             entities.append(VolvoSensor(coordinator, idx, "home_pile_appointment"))
             entities.append(VolvoSensor(coordinator, idx, "charging_voltage"))
             entities.append(VolvoSensor(coordinator, idx, "charging_current"))
             entities.append(VolvoSensor(coordinator, idx, "charging_session_energy"))
+            # Trailing-30-day charged energy + monthly history (from charge records).
+            entities.append(VolvoStatSensor(coordinator, idx, "energy_last_30d", "energy_monthly"))
 
     async_add_entities(entities)
 
@@ -121,6 +131,27 @@ class VolvoHomePileSensor(VolvoSensor):
     @property
     def extra_state_attributes(self):
         return self.coordinator.data[self.idx].get("home_pile_raw") or {}
+
+
+class VolvoStatSensor(VolvoEntity, SensorEntity):
+    """A trailing-30-day stat whose per-month history is exposed as an attribute
+    (``monthly``) for the charging card's inline histograms."""
+
+    def __init__(self, coordinator, idx, metaMapKey, monthly_key):
+        super().__init__(coordinator, idx, metaMapKey, Platform.SENSOR)
+        self._monthly_key = monthly_key
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        vehicle = self.coordinator.data[self.idx]
+        self._attr_native_value = vehicle.get(self.metaMapKey)
+        self._attr_native_unit_of_measurement = metaMap[self.metaMapKey]["unit"]
+        if "state_class" in metaMap[self.metaMapKey]:
+            self._attr_state_class = metaMap[self.metaMapKey]["state_class"]
+        self._attr_extra_state_attributes = {
+            "monthly": vehicle.get(self._monthly_key) or []
+        }
+        self.async_write_ha_state()
 
 
 class VolvoFullChargeRangeSensor(VolvoEntity, SensorEntity):

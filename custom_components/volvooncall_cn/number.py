@@ -23,9 +23,9 @@ async def async_setup_entry(
     numbers = []
     for idx, ent in enumerate(coordinator.data):
         numbers.append(VolovEngineDurationNumInput(coordinator, idx, "engine_duration_number"))
-        # Charge-limit slider only for cars with a bound home wallbox (the
-        # auto-stop is enforced through the pile's stop command).
-        if ent.get("has_home_pile"):
+        # Charge-limit slider only for electric cars with a bound home wallbox
+        # (the account-level wallbox must not attach to a fuel car).
+        if ent.get("has_battery") and ent.get("has_home_pile"):
             numbers.append(VolvoChargeLimitNumber(coordinator, idx, "charge_limit_number"))
 
     async_add_entities(numbers)
