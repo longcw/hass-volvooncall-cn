@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.8.0";
+const CARD_VERSION = "2.9.0";
 
 // The API reports the tank in litres and never its size, so the fuel bar needs
 // a capacity to divide by. 71 L covers the XC60/XC90/S90 petrol range; override
@@ -696,22 +696,54 @@ class VolvoCarCard extends HTMLElement {
     return records.map((record) => this._refuelRowHtml(record)).join("");
   }
 
+  _refuelDateInputValue(at) {
+    const parsed = at ? new Date(at) : new Date();
+    const date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    const pad = (number) => String(number).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+
+  _composeAt(date, originalAt) {
+    // A date input carries no time of day; keep the record's own so editing the
+    // date doesn't silently move a fill to midnight.
+    const parsed = originalAt ? new Date(originalAt) : new Date();
+    const base = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    const pad = (number) => String(number).padStart(2, "0");
+    return `${date}T${pad(base.getHours())}:${pad(base.getMinutes())}:${pad(base.getSeconds())}`;
+  }
+
+  _refuelFormHtml({ at, odometer, liters }, saveAttribute, saveValue) {
+    return `
+      <div class="refuel-form">
+        <label><span>日期</span>
+          <input class="refuel-date" type="date" value="${this._escape(this._refuelDateInputValue(at))}" />
+        </label>
+        <label><span>里程</span>
+          <input class="refuel-odo" type="number" inputmode="decimal" step="0.1" min="0"
+                 value="${this._escape(this._refuelNumber(odometer, 1))}" placeholder="km" />
+        </label>
+        <label><span>加油量</span>
+          <input class="refuel-input" type="number" inputmode="decimal" step="0.01" min="0.1"
+                 value="${this._escape(this._refuelNumber(liters, 2))}" placeholder="L" />
+        </label>
+        <div class="refuel-form-actions">
+          <button class="refuel-ok" data-${saveAttribute}="${this._escape(saveValue)}" ${this._refuelBusy ? "disabled" : ""}>保存</button>
+          <button class="refuel-no" data-refuel-cancel="1" ${this._refuelBusy ? "disabled" : ""}>取消</button>
+        </div>
+      </div>`;
+  }
+
   _refuelRowHtml(record) {
     const id = String(record.id ?? "");
     const liters = this._refuelNumber(record.liters, 2);
     if (this._refuelEditing === id) {
       return `
         <div class="refuel-item editing">
-          <div class="refuel-main">
-            <span class="refuel-when">${this._escape(this._refuelWhen(record))}</span>
-            <span class="refuel-hint">改成加油站实际升数</span>
+          <div class="refuel-form-head">
+            <span class="refuel-when">修正记录</span>
+            <span class="refuel-hint">按加油站小票填写</span>
           </div>
-          <div class="refuel-edit">
-            <input class="refuel-input" type="number" inputmode="decimal" step="0.01" min="0.1"
-                   value="${this._escape(liters)}" aria-label="实际加油量（升）" />
-            <button class="refuel-ok" data-refuel-save="${this._escape(id)}" ${this._refuelBusy ? "disabled" : ""}>保存</button>
-            <button class="refuel-no" data-refuel-cancel="1" ${this._refuelBusy ? "disabled" : ""}>取消</button>
-          </div>
+          ${this._refuelFormHtml(record, "refuel-save", id)}
         </div>`;
     }
     return `
@@ -738,13 +770,43 @@ class VolvoCarCard extends HTMLElement {
                 <ha-icon icon="mdi:plus"></ha-icon><span>手动记录一次加油</span>
               </button>`;
     }
+    // Defaults describe a fill happening now; change the date and odometer to
+    // back-fill one from last week.
     return `
-      <div class="refuel-add-form">
-        <input class="refuel-input refuel-new" type="number" inputmode="decimal" step="0.01" min="0.1"
-               placeholder="加油量（升）" aria-label="加油量（升）" />
-        <button class="refuel-ok" data-refuel-create="1" ${this._refuelBusy ? "disabled" : ""}>保存</button>
-        <button class="refuel-no" data-refuel-cancel="1" ${this._refuelBusy ? "disabled" : ""}>取消</button>
+      <div class="refuel-item editing">
+        <div class="refuel-form-head">
+          <span class="refuel-when">新增记录</span>
+          <span class="refuel-hint">可改为过去某次加油</span>
+        </div>
+        ${this._refuelFormHtml(
+          { at: undefined, odometer: this._stateNumber("odometer"), liters: undefined },
+          "refuel-create",
+          "1",
+        )}
       </div>`;
+  }
+
+  _refuelReadForm(originalAt) {
+    const dialog = this.shadowRoot?.querySelector(".refuel-dialog");
+    if (!dialog) return null;
+    const liters = Number.parseFloat(dialog.querySelector(".refuel-input")?.value);
+    if (!Number.isFinite(liters) || liters <= 0) {
+      this._setRefuelStatus("请输入有效的加油量", "error");
+      return null;
+    }
+    const data = { liters };
+    const odometerValue = dialog.querySelector(".refuel-odo")?.value;
+    if (odometerValue) {
+      const odometer = Number.parseFloat(odometerValue);
+      if (!Number.isFinite(odometer) || odometer < 0) {
+        this._setRefuelStatus("请输入有效的里程", "error");
+        return null;
+      }
+      data.odometer = odometer;
+    }
+    const date = dialog.querySelector(".refuel-date")?.value;
+    if (date) data.at = this._composeAt(date, originalAt);
+    return data;
   }
 
   _tripRow(title, rows) {
@@ -889,24 +951,16 @@ class VolvoCarCard extends HTMLElement {
       this._refreshRefuelDialog();
     });
     on("[data-refuel-save]", (element) => {
-      const liters = Number.parseFloat(dialog.querySelector(".refuel-input")?.value);
-      if (!Number.isFinite(liters) || liters <= 0) {
-        this._setRefuelStatus("请输入有效的加油量", "error");
-        return;
-      }
-      this._callRefuel(
-        "update_refuel",
-        { record_id: element.dataset.refuelSave, liters },
-        "加油量已更新",
-      );
+      const id = element.dataset.refuelSave;
+      const original = this._refuelRecords().find((record) => String(record.id) === id);
+      const data = this._refuelReadForm(original?.at);
+      if (!data) return;
+      this._callRefuel("update_refuel", { record_id: id, ...data }, "记录已更新");
     });
     on("[data-refuel-create]", () => {
-      const liters = Number.parseFloat(dialog.querySelector(".refuel-new")?.value);
-      if (!Number.isFinite(liters) || liters <= 0) {
-        this._setRefuelStatus("请输入有效的加油量", "error");
-        return;
-      }
-      this._callRefuel("log_refuel", { liters }, "已记录本次加油");
+      const data = this._refuelReadForm();
+      if (!data) return;
+      this._callRefuel("log_refuel", data, "已记录一次加油");
     });
     on("[data-refuel-delete]", async (element) => {
       if (!(await this._confirm("确认删除这条加油记录？"))) return;
@@ -1551,10 +1605,13 @@ class VolvoCarCard extends HTMLElement {
       .refuel-icon ha-icon { --mdc-icon-size: 16px; }
       .refuel-icon:hover { background: color-mix(in srgb, var(--voc-blue) 8%, transparent); color: var(--voc-blue); }
       .refuel-icon.danger:hover { background: color-mix(in srgb, var(--voc-danger) 10%, transparent); color: var(--voc-danger); }
-      .refuel-edit, .refuel-add-form { display: flex; align-items: center; gap: 6px; }
-      .refuel-input { width: 84px; min-height: 32px; border: 1px solid var(--voc-line); border-radius: 8px; padding: 0 8px; background: var(--voc-bg); color: var(--voc-text); font: inherit; font-size: 13px; }
-      .refuel-add-form .refuel-input { flex: 1; width: auto; }
-      .refuel-input:focus-visible { outline: 2px solid var(--voc-blue); outline-offset: 1px; }
+      .refuel-item.editing { display: block; }
+      .refuel-form-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+      .refuel-form { display: grid; gap: 7px; padding: 8px 0 2px; }
+      .refuel-form label { display: grid; grid-template-columns: 46px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--voc-secondary); font-size: 11px; }
+      .refuel-form input { width: 100%; min-height: 32px; border: 1px solid var(--voc-line); border-radius: 8px; padding: 0 8px; background: var(--voc-bg); color: var(--voc-text); font: inherit; font-size: 13px; }
+      .refuel-form input:focus-visible { outline: 2px solid var(--voc-blue); outline-offset: 1px; }
+      .refuel-form-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
       .refuel-ok, .refuel-no { min-height: 32px; padding: 0 11px; border: 0; border-radius: 8px; cursor: pointer; font-size: 12px; }
       .refuel-ok { background: var(--voc-blue); color: #fff; }
       .refuel-no { background: var(--voc-surface); color: var(--voc-secondary); }

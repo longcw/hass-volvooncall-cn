@@ -34,6 +34,14 @@ log_refuel:
           step: 0.1
           unit_of_measurement: km
           mode: box
+    at:
+      name: 时间 (When)
+      description: >-
+        When the fill-up happened, for back-filling a past one. Local time;
+        defaults to now.
+      example: "2026-07-20 08:30:00"
+      selector:
+        datetime:
 
 update_refuel:
   name: 修正加油记录 (Update refuel record)
@@ -77,6 +85,14 @@ update_refuel:
           step: 0.1
           unit_of_measurement: km
           mode: box
+    at:
+      name: 时间 (When)
+      description: >-
+        Corrected date/time. Records are ordered by this, so it also decides
+        which tank the next fill is measured against.
+      example: "2026-07-20 08:30:00"
+      selector:
+        datetime:
 
 delete_refuel:
   name: 删除加油记录 (Delete refuel record)

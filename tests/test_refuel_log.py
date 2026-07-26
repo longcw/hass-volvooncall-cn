@@ -127,6 +127,55 @@ async def test_correcting_litres_reprices_the_tank_and_survives_polling(hass):
 
 
 @pytest.mark.asyncio
+async def test_correcting_the_odometer_reprices_the_tank(hass):
+    """The fill was logged on the next poll, 30 km down the road."""
+    store = await _store(hass, "REFUEL_EDIT_ODO")
+    await store.add_refuel(40.0, 9000.0, BASE)
+    await store.add_refuel(40.0, 9530.0, BASE + timedelta(days=7))
+
+    newest = store.get_refuel_stats()["records"][0]
+    assert newest["consumption"] == 7.5  # 40 L / 530 km
+
+    assert await store.update_refuel(newest["id"], odometer=9500.0) is True
+    corrected = store.get_refuel_stats()["records"][0]
+    assert corrected["odometer"] == 9500.0
+    assert corrected["distance"] == 500.0
+    assert corrected["consumption"] == 8.0
+    assert await store.update_refuel(newest["id"], odometer=-5) is False
+
+
+@pytest.mark.asyncio
+async def test_correcting_the_date_reorders_the_log(hass):
+    """Records are ordered by date, so moving one moves what it measures."""
+    store = await _store(hass, "REFUEL_EDIT_DATE")
+    await store.add_refuel(40.0, 9000.0, BASE)
+    middle = await store.add_refuel(30.0, 9300.0, BASE + timedelta(days=4))
+    await store.add_refuel(40.0, 9500.0, BASE + timedelta(days=7))
+
+    assert [r["odometer"] for r in store.get_refuel_stats()["records"]] == [
+        9500.0, 9300.0, 9000.0,
+    ]
+
+    # It actually happened before the first one, at 8900 km.
+    assert (
+        await store.update_refuel(
+            middle["id"], odometer=8900.0, when=BASE - timedelta(days=3)
+        )
+        is True
+    )
+    stats = store.get_refuel_stats()
+    assert [r["odometer"] for r in stats["records"]] == [9500.0, 9000.0, 8900.0]
+    # The id survives the move, so the card's edit button still resolves.
+    assert any(r["id"] == middle["id"] for r in stats["records"])
+    # 40 L over the 100 km from 8900 to 9000.
+    assert stats["records"][1]["consumption"] == 40.0
+    assert stats["records"][0]["consumption"] == 8.0
+
+    # Nothing to change is not an update.
+    assert await store.update_refuel(middle["id"]) is False
+
+
+@pytest.mark.asyncio
 async def test_manual_records_and_deletion(hass):
     store = await _store(hass, "REFUEL_MANUAL")
     first = await store.add_refuel(50.0, 20000.0, BASE)

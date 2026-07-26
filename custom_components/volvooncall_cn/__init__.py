@@ -63,6 +63,7 @@ ATTR_VIN = "vin"
 ATTR_LITERS = "liters"
 ATTR_ODOMETER = "odometer"
 ATTR_RECORD_ID = "record_id"
+ATTR_AT = "at"
 
 
 def _read_card_version(filename: str) -> str:
@@ -154,13 +155,23 @@ async def _async_register_refuel_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, SERVICE_LOG_REFUEL):
         return
 
+    def _resolve_when(value):
+        """A local-aware timestamp; a bare `2026-07-20 08:00` means local time."""
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+        return dt_util.as_local(value)
+
     async def _handle_log_refuel(call: ServiceCall) -> None:
         coordinator, idx, store = _async_resolve_store(hass, call.data[ATTR_VIN])
         odometer = call.data.get(ATTR_ODOMETER)
         if odometer is None:
             odometer = getattr(coordinator.data[idx], "odo_meter", None)
         record = await store.add_refuel(
-            call.data[ATTR_LITERS], odometer, dt_util.now()
+            call.data[ATTR_LITERS],
+            odometer,
+            _resolve_when(call.data.get(ATTR_AT)) or dt_util.now(),
         )
         if record is None:
             raise ServiceValidationError("Refuel litres must be greater than 0")
@@ -172,6 +183,7 @@ async def _async_register_refuel_services(hass: HomeAssistant) -> None:
             call.data[ATTR_RECORD_ID],
             liters=call.data.get(ATTR_LITERS),
             odometer=call.data.get(ATTR_ODOMETER),
+            when=_resolve_when(call.data.get(ATTR_AT)),
         )
         if not updated:
             raise ServiceValidationError(
@@ -195,6 +207,7 @@ async def _async_register_refuel_services(hass: HomeAssistant) -> None:
             vol.Required(ATTR_VIN): cv.string,
             vol.Required(ATTR_LITERS): vol.Coerce(float),
             vol.Optional(ATTR_ODOMETER): vol.Coerce(float),
+            vol.Optional(ATTR_AT): cv.datetime,
         }),
     )
     hass.services.async_register(
@@ -206,6 +219,7 @@ async def _async_register_refuel_services(hass: HomeAssistant) -> None:
             vol.Required(ATTR_RECORD_ID): cv.string,
             vol.Optional(ATTR_LITERS): vol.Coerce(float),
             vol.Optional(ATTR_ODOMETER): vol.Coerce(float),
+            vol.Optional(ATTR_AT): cv.datetime,
         }),
     )
     hass.services.async_register(

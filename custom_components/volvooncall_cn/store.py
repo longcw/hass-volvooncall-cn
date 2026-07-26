@@ -434,14 +434,16 @@ class VolvoStore(Store[StoreData]):
         await self._save_refuel_log(log, fuel_amount_last=fuel)
         return True
 
-    async def add_refuel(self, liters, odometer, now) -> dict | None:
-        """Log a fill the detector missed. Returns the new record."""
+    async def add_refuel(self, liters, odometer, when) -> dict | None:
+        """Log a fill the detector missed — including a past one, hence ``when``.
+
+        Returns the new record."""
         liters_value = _as_float(liters)
         if liters_value is None or liters_value <= 0:
             return None
         self.data = self.data or await self.load_create_data()
         log = self._refuel_log()
-        timestamp = now.isoformat()
+        timestamp = when.isoformat()
         record = {
             "id": self._unique_refuel_id(log, timestamp),
             "at": timestamp,
@@ -457,15 +459,24 @@ class VolvoStore(Store[StoreData]):
         await self._save_refuel_log(log)
         return record
 
-    async def update_refuel(self, record_id, liters=None, odometer=None) -> bool:
-        """Correct a record — typically the litres, to what the pump charged for."""
+    async def update_refuel(
+        self, record_id, liters=None, odometer=None, when=None
+    ) -> bool:
+        """Correct a record: the litres (to what the pump charged for), the
+        odometer, or when it happened.
+
+        The id stays as issued, so a corrected date doesn't invalidate a
+        reference to the record. Records are ordered by ``at``, so moving a date
+        also moves which tank the next fill is measured against."""
         self.data = self.data or await self.load_create_data()
         log = self._refuel_log()
         liters_value = _as_float(liters)
         odometer_value = _as_float(odometer)
         if liters_value is not None and liters_value <= 0:
             return False
-        if liters_value is None and odometer_value is None:
+        if odometer_value is not None and odometer_value < 0:
+            return False
+        if liters_value is None and odometer_value is None and when is None:
             return False
 
         for index, record in enumerate(log):
@@ -476,6 +487,8 @@ class VolvoStore(Store[StoreData]):
                 updated["liters"] = round(liters_value, 2)
             if odometer_value is not None:
                 updated["odometer"] = odometer_value
+            if when is not None:
+                updated["at"] = when.isoformat()
             updated["edited"] = True
             log[index] = updated
             await self._save_refuel_log(log)
