@@ -185,6 +185,9 @@
             "fuel_consumption_at": {
                 "name": "{nickname}AT油耗"
             },
+            "fuel_consumption_measured": {
+                "name": "{nickname}实测油耗"
+            },
             "trip_meter_manual": {
                 "name": "{nickname}TM里程"
             },

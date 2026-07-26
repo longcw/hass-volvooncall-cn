@@ -30,6 +30,7 @@ async def async_setup_entry(
         entities.append(VolvoSensor(coordinator, idx, "fuel_amount"))
         entities.append(VolvoSensor(coordinator, idx, "fuel_average_consumption_liters_per_100_km"))
         entities.append(VolvoSensor(coordinator, idx, "fuel_consumption_at"))
+        entities.append(VolvoRefuelSensor(coordinator, idx, "fuel_consumption_measured"))
         entities.append(VolvoSensor(coordinator, idx, "trip_meter_manual"))
         entities.append(VolvoSensor(coordinator, idx, "trip_meter_auto"))
         entities.append(VolvoSensor(coordinator, idx, "trip_since_charge"))
@@ -173,6 +174,37 @@ class VolvoFullChargeRangeSensor(VolvoEntity, SensorEntity):
             "sample_count": store_data.get("full_charge_sample_count") or 0,
             "data_source": store_data.get("full_charge_data_source"),
             "trigger_battery_level": 100,
+        }
+        self.async_write_ha_state()
+
+
+class VolvoRefuelSensor(VolvoEntity, SensorEntity):
+    """Measured fuel consumption for the last tank, from the refuel log.
+
+    State is the newest tank-to-tank L/100km figure; the log itself rides along
+    as the ``records`` attribute, which is what the car card's 加油记录 dialog
+    lists and edits."""
+
+    def __init__(self, coordinator, idx, metaMapKey):
+        super().__init__(coordinator, idx, metaMapKey, Platform.SENSOR)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        store_data = self.coordinator.store_datas[self.idx]
+        stats = store_data.get_refuel_stats()
+        records = stats["records"]
+        newest = records[0] if records else {}
+        self._attr_native_value = stats["last"]
+        self._attr_native_unit_of_measurement = metaMap[self.metaMapKey]["unit"]
+        self._attr_state_class = metaMap[self.metaMapKey]["state_class"]
+        self._attr_extra_state_attributes = {
+            "average": stats["average"],
+            "record_count": stats["count"],
+            "last_refuel_at": newest.get("at"),
+            "last_refuel_liters": newest.get("liters"),
+            # Newest first, trimmed: the state machine keeps attributes in
+            # memory and writes them to the recorder on every state change.
+            "records": records[:12],
         }
         self.async_write_ha_state()
 

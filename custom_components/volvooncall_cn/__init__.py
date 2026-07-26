@@ -5,8 +5,11 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from homeassistant.core import HomeAssistant
+import voluptuous as vol
+
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -14,7 +17,7 @@ from homeassistant.helpers.entity import EntityCategory
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, ServiceValidationError
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -51,6 +54,15 @@ BUNDLED_CARDS = (
     ("volvo-car-card.js", CARD_RESOURCE_PATH),
     ("volvo-charging-card.js", CHARGING_CARD_RESOURCE_PATH),
 )
+
+# Services for the refuel log (see services.yaml).
+SERVICE_LOG_REFUEL = "log_refuel"
+SERVICE_UPDATE_REFUEL = "update_refuel"
+SERVICE_DELETE_REFUEL = "delete_refuel"
+ATTR_VIN = "vin"
+ATTR_LITERS = "liters"
+ATTR_ODOMETER = "odometer"
+ATTR_RECORD_ID = "record_id"
 
 
 def _read_card_version(filename: str) -> str:
@@ -120,6 +132,93 @@ async def _async_register_card_resource(
     )
 
 
+def _async_resolve_store(hass: HomeAssistant, vin: str):
+    """(coordinator, idx, store) for a VIN, across every configured account."""
+    target = str(vin or "").strip().lower()
+    for coordinator in (hass.data.get(DOMAIN) or {}).values():
+        for idx, vehicle in enumerate(coordinator.data or []):
+            if str(getattr(vehicle, "vin", "")).lower() != target:
+                continue
+            if idx >= len(coordinator.store_datas):
+                break
+            return coordinator, idx, coordinator.store_datas[idx]
+    raise ServiceValidationError(f"No Volvo vehicle found for VIN {vin}")
+
+
+async def _async_register_refuel_services(hass: HomeAssistant) -> None:
+    """Services backing the car card's 加油记录 dialog.
+
+    The log lives in the per-VIN store, so these only touch local state: after
+    mutating it we push the new value to the entities instead of polling the
+    car."""
+    if hass.services.has_service(DOMAIN, SERVICE_LOG_REFUEL):
+        return
+
+    async def _handle_log_refuel(call: ServiceCall) -> None:
+        coordinator, idx, store = _async_resolve_store(hass, call.data[ATTR_VIN])
+        odometer = call.data.get(ATTR_ODOMETER)
+        if odometer is None:
+            odometer = getattr(coordinator.data[idx], "odo_meter", None)
+        record = await store.add_refuel(
+            call.data[ATTR_LITERS], odometer, dt_util.now()
+        )
+        if record is None:
+            raise ServiceValidationError("Refuel litres must be greater than 0")
+        coordinator.async_update_listeners()
+
+    async def _handle_update_refuel(call: ServiceCall) -> None:
+        coordinator, _idx, store = _async_resolve_store(hass, call.data[ATTR_VIN])
+        updated = await store.update_refuel(
+            call.data[ATTR_RECORD_ID],
+            liters=call.data.get(ATTR_LITERS),
+            odometer=call.data.get(ATTR_ODOMETER),
+        )
+        if not updated:
+            raise ServiceValidationError(
+                f"No refuel record {call.data[ATTR_RECORD_ID]} to update"
+            )
+        coordinator.async_update_listeners()
+
+    async def _handle_delete_refuel(call: ServiceCall) -> None:
+        coordinator, _idx, store = _async_resolve_store(hass, call.data[ATTR_VIN])
+        if not await store.delete_refuel(call.data[ATTR_RECORD_ID]):
+            raise ServiceValidationError(
+                f"No refuel record {call.data[ATTR_RECORD_ID]} to delete"
+            )
+        coordinator.async_update_listeners()
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LOG_REFUEL,
+        _handle_log_refuel,
+        schema=vol.Schema({
+            vol.Required(ATTR_VIN): cv.string,
+            vol.Required(ATTR_LITERS): vol.Coerce(float),
+            vol.Optional(ATTR_ODOMETER): vol.Coerce(float),
+        }),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_REFUEL,
+        _handle_update_refuel,
+        schema=vol.Schema({
+            vol.Required(ATTR_VIN): cv.string,
+            vol.Required(ATTR_RECORD_ID): cv.string,
+            vol.Optional(ATTR_LITERS): vol.Coerce(float),
+            vol.Optional(ATTR_ODOMETER): vol.Coerce(float),
+        }),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_REFUEL,
+        _handle_delete_refuel,
+        schema=vol.Schema({
+            vol.Required(ATTR_VIN): cv.string,
+            vol.Required(ATTR_RECORD_ID): cv.string,
+        }),
+    )
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Serve and register the bundled Volvo cards (runs once at integration load)."""
     try:
@@ -132,6 +231,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             await _async_register_card_resource(hass, resource_path, card_url)
     except Exception as err:  # pragma: no cover - never block integration setup
         _LOGGER.warning("Volvo card frontend setup failed: %s", err)
+    await _async_register_refuel_services(hass)
     return True
 
 
@@ -354,6 +454,21 @@ class VolvoCoordinator(DataUpdateCoordinator):
                         vehicle.distance_monthly = dstats.get("monthly") or []
                     except Exception as err:
                         _LOGGER.debug("Distance stats failed for %s: %s", vin, err)
+
+                    # Refuel log: a jump in the reported tank level is a fill-up.
+                    # Recording it here (not when the user gets around to logging
+                    # it) pins the odometer to the moment of the fill, which is
+                    # what makes the tank-to-tank L/100km figure meaningful.
+                    try:
+                        logged = await store_data.record_fuel_amount(
+                            getattr(vehicle, "fuel_amount", None),
+                            getattr(vehicle, "odo_meter", None),
+                            dt_util.now(),
+                        )
+                        if logged:
+                            _LOGGER.info("Refuel detected for %s", vin)
+                    except Exception as err:
+                        _LOGGER.warning("Refuel detection failed for %s: %s", vin, err)
 
                     # Enforce the persisted charge limit: once the battery
                     # reaches the ceiling, stop the active home-charge session.
@@ -881,6 +996,12 @@ metaMap = {
     "energy_last_30d": {
         "name": "Charged Energy (30 days)", "device_class": None, "icon": "mdi:lightning-bolt",
         "unit": "kWh", "entity_id": "energy_last_30d",
+    },
+    # Tank-to-tank consumption from the refuel log — what the pump actually
+    # charged for, divided by the distance driven on that tank.
+    "fuel_consumption_measured": {
+        "name": "Fuel Consumption (measured)", "device_class": None, "icon": "mdi:gas-station-outline",
+        "unit": "L/100km", "entity_id": "fuel_consumption_measured", "state_class": "measurement",
     },
 }
 

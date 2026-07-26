@@ -1,4 +1,9 @@
-const CARD_VERSION = "2.7.1";
+const CARD_VERSION = "2.8.0";
+
+// The API reports the tank in litres and never its size, so the fuel bar needs
+// a capacity to divide by. 71 L covers the XC60/XC90/S90 petrol range; override
+// per card with the 油箱容积 option.
+const DEFAULT_TANK_CAPACITY = 71;
 
 const MODEL_ASSETS = {
   s90: new URL("./assets/car-s90-black-card.webp", import.meta.url).href,
@@ -23,6 +28,7 @@ const ENTITY_DEFINITIONS = {
   sunroof: ["binary_sensor", "sunroof"],
   fuel: ["sensor", "fuel_amount"],
   fuel_range: ["sensor", "distance_to_empty"],
+  fuel_measured: ["sensor", "fuel_consumption_measured"],
   battery: ["sensor", "battery_charge_level"],
   electric_range: ["sensor", "electric_range"],
   full_charge_range: ["sensor", "full_charge_electric_range"],
@@ -102,6 +108,7 @@ const LABELS = {
   name: "卡片标题",
   model: "车型",
   image: "车辆俯视图 URL（可选，留空使用黑色内置车模）",
+  tank_capacity: "油箱容积（升，用于油量百分比）",
   show_controls: "显示远程控制",
   show_statistics: "显示行程统计",
 };
@@ -143,6 +150,11 @@ class VolvoCarCard extends HTMLElement {
     this._pendingActions = new Set();
     this._feedbackTimer = undefined;
     this._hasRenderedVehicle = false;
+    // 加油记录 dialog state: which record is being corrected, whether the
+    // manual-entry form is open, and whether a service call is in flight.
+    this._refuelEditing = undefined;
+    this._refuelAdding = false;
+    this._refuelBusy = false;
   }
 
   static getConfigForm() {
@@ -168,6 +180,12 @@ class VolvoCarCard extends HTMLElement {
           },
         },
         { name: "image", selector: { text: {} } },
+        {
+          name: "tank_capacity",
+          selector: {
+            number: { min: 20, max: 150, step: 0.5, mode: "box", unit_of_measurement: "L" },
+          },
+        },
         { name: "show_controls", selector: { boolean: {} } },
         { name: "show_statistics", selector: { boolean: {} } },
       ],
@@ -180,6 +198,7 @@ class VolvoCarCard extends HTMLElement {
       vin: "",
       name: "S90 T8",
       model: "s90_t8",
+      tank_capacity: DEFAULT_TANK_CAPACITY,
       show_controls: true,
       show_statistics: true,
     };
@@ -189,6 +208,7 @@ class VolvoCarCard extends HTMLElement {
     this._config = {
       name: "S90 T8",
       model: "s90_t8",
+      tank_capacity: DEFAULT_TANK_CAPACITY,
       show_controls: true,
       show_statistics: true,
       entities: {},
@@ -196,6 +216,8 @@ class VolvoCarCard extends HTMLElement {
     };
     this._lastStateSignature = undefined;
     this._hasRenderedVehicle = false;
+    this._refuelEditing = undefined;
+    this._refuelAdding = false;
     this._render();
   }
 
@@ -259,6 +281,11 @@ class VolvoCarCard extends HTMLElement {
           state?.state || "missing",
           attrs.sample_count || "",
           attrs.sampled_at || "",
+          // Refuel log: a corrected record can leave the state untouched while
+          // the history behind it changes.
+          attrs.record_count || "",
+          attrs.last_refuel_at || "",
+          attrs.average || "",
         ].join(":");
       })
       .join("|");
@@ -427,6 +454,14 @@ class VolvoCarCard extends HTMLElement {
                 ? this._stateRow("energy_30d", "近 30 天充电", this._displayState("energy_30d"), "charge", "mdi:lightning-bolt")
                 : ""
             }
+            ${
+              hasFuel && this._state("fuel_measured")
+                ? `<button class="state-row" data-detail="refuel" aria-label="加油记录明细">
+                     <span class="row-label"><ha-icon icon="mdi:gas-station"></ha-icon><span>实测油耗</span></span>
+                     <strong>${this._escape(this._refuelHeadline())}</strong>
+                   </button>`
+                : ""
+            }
           </div>
         </div>
 
@@ -503,11 +538,22 @@ class VolvoCarCard extends HTMLElement {
     return isLocked ? "车辆安全锁闭" : "门窗均已关闭";
   }
 
+  _tankCapacity() {
+    const configured = Number.parseFloat(this._config?.tank_capacity);
+    return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_TANK_CAPACITY;
+  }
+
   _rangeTile(key, label, levelKey, tone) {
     const value = this._displayState(key);
     const level = this._stateNumber(levelKey);
-    const percentage = Number.isFinite(level) ? Math.max(0, Math.min(100, level)) : 0;
-    const levelText = this._displayState(levelKey);
+    let percentage = Number.isFinite(level) ? Math.max(0, Math.min(100, level)) : 0;
+    let levelText = this._displayState(levelKey);
+    if (tone === "fuel" && Number.isFinite(level)) {
+      // fuel_amount is litres, not a percentage — a full 71 L tank would draw a
+      // 71% bar. Divide by the configured tank size so full reads 100%.
+      percentage = Math.max(0, Math.min(100, (level / this._tankCapacity()) * 100));
+      levelText = `${levelText} · ${Math.round(percentage)}%`;
+    }
     const icon = tone === "electric" ? "mdi:lightning-bolt" : "mdi:gas-station";
     return `
       <button class="range-tile ${tone}" data-more-info="${this._escape(this._entityId(key))}">
@@ -578,7 +624,127 @@ class VolvoCarCard extends HTMLElement {
           <button class="detail-close" aria-label="关闭"><ha-icon icon="mdi:close"></ha-icon></button>
         </div>
         <div class="detail-list">${bodyRows}</div>
+      </dialog>
+      ${this._state("fuel_measured") ? this._refuelDialog() : ""}`;
+  }
+
+  // --- 加油记录 (refuel log) -------------------------------------------------
+
+  _refuelRecords() {
+    const records = this._state("fuel_measured")?.attributes?.records;
+    return Array.isArray(records) ? records : [];
+  }
+
+  _refuelHeadline() {
+    const stateObj = this._state("fuel_measured");
+    if (Number.isFinite(Number.parseFloat(stateObj?.state))) {
+      return this._displayState("fuel_measured");
+    }
+    return (stateObj?.attributes?.record_count || 0) > 0 ? "待下次加油" : "待首次加油";
+  }
+
+  _refuelNumber(value, digits = 1, suffix = "") {
+    const number = Number.parseFloat(value);
+    if (!Number.isFinite(number)) return "";
+    return `${Number(number.toFixed(digits))}${suffix}`;
+  }
+
+  _refuelWhen(record) {
+    const parsed = new Date(record.at);
+    const when = Number.isNaN(parsed.getTime())
+      ? "—"
+      : `${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(parsed.getDate()).padStart(2, "0")}`;
+    const odometer = this._refuelNumber(record.odometer, 0, " km");
+    return odometer ? `${when} · ${odometer}` : when;
+  }
+
+  _refuelDetail(record) {
+    const consumption = this._refuelNumber(record.consumption, 1, " L/100km");
+    const distance = this._refuelNumber(record.distance, 0, " km");
+    if (consumption) return `${consumption} · 本箱 ${distance}`;
+    if (record.source === "manual") return "手动记录 · 等待下次加油计算";
+    return distance ? `本箱 ${distance} · 数据不足` : "首次记录 · 等待下次加油计算";
+  }
+
+  _refuelDialog() {
+    const attrs = this._state("fuel_measured")?.attributes || {};
+    const average = this._refuelNumber(attrs.average, 1, " L/100km") || "—";
+    return `
+      <dialog class="detail-dialog refuel-dialog" data-dialog="refuel">
+        <div class="detail-head">
+          <div><ha-icon icon="mdi:gas-station"></ha-icon><span>加油记录</span></div>
+          <button class="detail-close" aria-label="关闭"><ha-icon icon="mdi:close"></ha-icon></button>
+        </div>
+        <div class="refuel-summary">
+          <div><span>上次油耗</span><strong>${this._escape(this._refuelHeadline())}</strong></div>
+          <div><span>平均油耗</span><strong>${this._escape(average)}</strong></div>
+        </div>
+        <div class="refuel-list">${this._refuelListHtml()}</div>
+        <div class="refuel-status" role="status" aria-live="polite"></div>
+        <div class="refuel-foot">${this._refuelFootHtml()}</div>
       </dialog>`;
+  }
+
+  _refuelListHtml() {
+    const records = this._refuelRecords();
+    if (!records.length) {
+      return `<div class="refuel-empty">
+                <ha-icon icon="mdi:information-outline"></ha-icon>
+                <span>暂无记录。加油后油量跳升会自动记一笔，届时把升数改成加油站的实际数值即可。</span>
+              </div>`;
+    }
+    return records.map((record) => this._refuelRowHtml(record)).join("");
+  }
+
+  _refuelRowHtml(record) {
+    const id = String(record.id ?? "");
+    const liters = this._refuelNumber(record.liters, 2);
+    if (this._refuelEditing === id) {
+      return `
+        <div class="refuel-item editing">
+          <div class="refuel-main">
+            <span class="refuel-when">${this._escape(this._refuelWhen(record))}</span>
+            <span class="refuel-hint">改成加油站实际升数</span>
+          </div>
+          <div class="refuel-edit">
+            <input class="refuel-input" type="number" inputmode="decimal" step="0.01" min="0.1"
+                   value="${this._escape(liters)}" aria-label="实际加油量（升）" />
+            <button class="refuel-ok" data-refuel-save="${this._escape(id)}" ${this._refuelBusy ? "disabled" : ""}>保存</button>
+            <button class="refuel-no" data-refuel-cancel="1" ${this._refuelBusy ? "disabled" : ""}>取消</button>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="refuel-item">
+        <div class="refuel-main">
+          <span class="refuel-when">${this._escape(this._refuelWhen(record))}</span>
+          <span class="refuel-calc">${this._escape(this._refuelDetail(record))}</span>
+        </div>
+        <div class="refuel-side">
+          <strong class="${record.edited ? "edited" : ""}">${this._escape(liters)} L</strong>
+          <button class="refuel-icon" data-refuel-edit="${this._escape(id)}" aria-label="修正加油量">
+            <ha-icon icon="mdi:pencil-outline"></ha-icon>
+          </button>
+          <button class="refuel-icon danger" data-refuel-delete="${this._escape(id)}" aria-label="删除记录">
+            <ha-icon icon="mdi:trash-can-outline"></ha-icon>
+          </button>
+        </div>
+      </div>`;
+  }
+
+  _refuelFootHtml() {
+    if (!this._refuelAdding) {
+      return `<button class="refuel-add" data-refuel-add="1">
+                <ha-icon icon="mdi:plus"></ha-icon><span>手动记录一次加油</span>
+              </button>`;
+    }
+    return `
+      <div class="refuel-add-form">
+        <input class="refuel-input refuel-new" type="number" inputmode="decimal" step="0.01" min="0.1"
+               placeholder="加油量（升）" aria-label="加油量（升）" />
+        <button class="refuel-ok" data-refuel-create="1" ${this._refuelBusy ? "disabled" : ""}>保存</button>
+        <button class="refuel-no" data-refuel-cancel="1" ${this._refuelBusy ? "disabled" : ""}>取消</button>
+      </div>`;
   }
 
   _tripRow(title, rows) {
@@ -655,10 +821,16 @@ class VolvoCarCard extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-action]").forEach((element) => {
       element.addEventListener("click", () => this._runAction(element.dataset.action));
     });
-    // Two detail dialogs: 车辆状态 -> 车况警告 (condition), 门窗与舱盖 -> 车身门窗 (body).
+    // Detail dialogs: 车辆状态 -> 车况警告 (condition), 门窗与舱盖 -> 车身门窗
+    // (body), 实测油耗 -> 加油记录 (refuel).
     this.shadowRoot.querySelectorAll("[data-detail]").forEach((element) => {
       element.addEventListener("click", () => {
         const which = element.dataset.detail;
+        if (which === "refuel") {
+          this._refuelEditing = undefined;
+          this._refuelAdding = false;
+          this._refreshRefuelDialog();
+        }
         this.shadowRoot
           .querySelector(`.detail-dialog[data-dialog="${which}"]`)
           ?.showModal?.();
@@ -670,7 +842,12 @@ class VolvoCarCard extends HTMLElement {
       dlg.addEventListener("click", (ev) => {
         if (ev.target === dlg) dlg.close();
       });
+      dlg.addEventListener("close", () => {
+        this._refuelEditing = undefined;
+        this._refuelAdding = false;
+      });
     });
+    this._bindRefuelEvents();
     // A component row inside a dialog opens its HA more-info.
     this.shadowRoot.querySelectorAll("[data-detail-entity]").forEach((element) => {
       element.addEventListener("click", () => {
@@ -686,6 +863,120 @@ class VolvoCarCard extends HTMLElement {
         );
       });
     });
+  }
+
+  _bindRefuelEvents() {
+    const dialog = this.shadowRoot?.querySelector(".refuel-dialog");
+    if (!dialog) return;
+    const on = (selector, handler) =>
+      dialog.querySelectorAll(selector).forEach((element) => {
+        element.addEventListener("click", () => handler(element));
+      });
+
+    on("[data-refuel-edit]", (element) => {
+      this._refuelEditing = element.dataset.refuelEdit;
+      this._refuelAdding = false;
+      this._refreshRefuelDialog();
+    });
+    on("[data-refuel-cancel]", () => {
+      this._refuelEditing = undefined;
+      this._refuelAdding = false;
+      this._refreshRefuelDialog();
+    });
+    on("[data-refuel-add]", () => {
+      this._refuelAdding = true;
+      this._refuelEditing = undefined;
+      this._refreshRefuelDialog();
+    });
+    on("[data-refuel-save]", (element) => {
+      const liters = Number.parseFloat(dialog.querySelector(".refuel-input")?.value);
+      if (!Number.isFinite(liters) || liters <= 0) {
+        this._setRefuelStatus("请输入有效的加油量", "error");
+        return;
+      }
+      this._callRefuel(
+        "update_refuel",
+        { record_id: element.dataset.refuelSave, liters },
+        "加油量已更新",
+      );
+    });
+    on("[data-refuel-create]", () => {
+      const liters = Number.parseFloat(dialog.querySelector(".refuel-new")?.value);
+      if (!Number.isFinite(liters) || liters <= 0) {
+        this._setRefuelStatus("请输入有效的加油量", "error");
+        return;
+      }
+      this._callRefuel("log_refuel", { liters }, "已记录本次加油");
+    });
+    on("[data-refuel-delete]", async (element) => {
+      if (!(await this._confirm("确认删除这条加油记录？"))) return;
+      this._callRefuel(
+        "delete_refuel",
+        { record_id: element.dataset.refuelDelete },
+        "记录已删除",
+      );
+    });
+  }
+
+  _refreshRefuelDialog() {
+    const dialog = this.shadowRoot?.querySelector(".refuel-dialog");
+    if (!dialog) return;
+    const attrs = this._state("fuel_measured")?.attributes || {};
+    const summary = dialog.querySelectorAll(".refuel-summary strong");
+    if (summary[0]) summary[0].textContent = this._refuelHeadline();
+    if (summary[1]) summary[1].textContent = this._refuelNumber(attrs.average, 1, " L/100km") || "—";
+    const list = dialog.querySelector(".refuel-list");
+    if (list) list.innerHTML = this._refuelListHtml();
+    const foot = dialog.querySelector(".refuel-foot");
+    if (foot) foot.innerHTML = this._refuelFootHtml();
+    this._bindRefuelEvents();
+    dialog.querySelector(".refuel-input")?.focus();
+  }
+
+  _setRefuelStatus(message, tone = "") {
+    const element = this.shadowRoot?.querySelector(".refuel-status");
+    if (!element) return;
+    element.textContent = message || "";
+    element.className = `refuel-status ${tone}`;
+  }
+
+  _refuelSignature() {
+    const attrs = this._state("fuel_measured")?.attributes || {};
+    return JSON.stringify(attrs.records || []);
+  }
+
+  async _awaitRefuelUpdate(previous) {
+    // The service mutates the store and pushes the sensor's new attributes;
+    // wait for them to land so the dialog redraws with real data rather than
+    // an optimistic guess. Renders are suppressed while a dialog is open, but
+    // `this._hass` is still refreshed, so polling it is enough.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      if (this._refuelSignature() !== previous) return true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return false;
+  }
+
+  async _callRefuel(service, data, successMessage) {
+    if (this._refuelBusy || !this._hass) return;
+    const vin = this._vin();
+    if (!vin) return;
+    this._refuelBusy = true;
+    this._setRefuelStatus("处理中…");
+    const before = this._refuelSignature();
+    try {
+      await this._hass.callService("volvooncall_cn", service, { vin, ...data });
+      await this._awaitRefuelUpdate(before);
+      this._refuelEditing = undefined;
+      this._refuelAdding = false;
+      this._refuelBusy = false;
+      this._refreshRefuelDialog();
+      this._setRefuelStatus(successMessage, "ok");
+    } catch (error) {
+      this._refuelBusy = false;
+      this._refreshRefuelDialog();
+      this._setRefuelStatus(`操作失败：${error?.message || error}`, "error");
+    }
   }
 
   async _runAction(key) {
@@ -1242,6 +1533,41 @@ class VolvoCarCard extends HTMLElement {
       .detail-row strong { font-size: 12px; font-weight: 600; color: var(--voc-text); }
       .detail-row strong.ok { color: var(--voc-success); }
       .detail-row strong.warn { color: var(--voc-danger); }
+      .refuel-dialog { width: min(92vw, 380px); }
+      .refuel-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0 10px; }
+      .refuel-summary > div { display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; border-radius: 10px; background: var(--voc-surface); }
+      .refuel-summary span { color: var(--voc-secondary); font-size: 11px; }
+      .refuel-summary strong { font-size: 15px; font-weight: 600; }
+      .refuel-list { display: flex; flex-direction: column; max-height: min(46vh, 320px); overflow-y: auto; }
+      .refuel-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 2px; border-bottom: 1px solid var(--voc-line); }
+      .refuel-item:last-child { border-bottom: 0; }
+      .refuel-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+      .refuel-when { font-size: 12px; font-weight: 600; color: var(--voc-text); }
+      .refuel-calc, .refuel-hint { color: var(--voc-secondary); font-size: 11px; }
+      .refuel-side { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+      .refuel-side strong { font-size: 13px; font-weight: 600; }
+      .refuel-side strong.edited { color: var(--voc-blue); }
+      .refuel-icon { border: 0; background: transparent; color: var(--voc-secondary); width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; cursor: pointer; }
+      .refuel-icon ha-icon { --mdc-icon-size: 16px; }
+      .refuel-icon:hover { background: color-mix(in srgb, var(--voc-blue) 8%, transparent); color: var(--voc-blue); }
+      .refuel-icon.danger:hover { background: color-mix(in srgb, var(--voc-danger) 10%, transparent); color: var(--voc-danger); }
+      .refuel-edit, .refuel-add-form { display: flex; align-items: center; gap: 6px; }
+      .refuel-input { width: 84px; min-height: 32px; border: 1px solid var(--voc-line); border-radius: 8px; padding: 0 8px; background: var(--voc-bg); color: var(--voc-text); font: inherit; font-size: 13px; }
+      .refuel-add-form .refuel-input { flex: 1; width: auto; }
+      .refuel-input:focus-visible { outline: 2px solid var(--voc-blue); outline-offset: 1px; }
+      .refuel-ok, .refuel-no { min-height: 32px; padding: 0 11px; border: 0; border-radius: 8px; cursor: pointer; font-size: 12px; }
+      .refuel-ok { background: var(--voc-blue); color: #fff; }
+      .refuel-no { background: var(--voc-surface); color: var(--voc-secondary); }
+      .refuel-ok:disabled, .refuel-no:disabled { opacity: .55; cursor: default; }
+      .refuel-empty { display: flex; align-items: flex-start; gap: 8px; padding: 12px 2px; color: var(--voc-secondary); font-size: 11.5px; line-height: 1.5; }
+      .refuel-empty ha-icon { --mdc-icon-size: 16px; flex: 0 0 auto; }
+      .refuel-status { min-height: 16px; padding: 4px 2px 0; color: var(--voc-secondary); font-size: 11px; }
+      .refuel-status.ok { color: var(--voc-success); }
+      .refuel-status.error { color: var(--voc-danger); }
+      .refuel-foot { margin-top: 6px; }
+      .refuel-add { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 38px; border: 1px dashed var(--voc-line); border-radius: 10px; background: transparent; color: var(--voc-secondary); font-size: 12px; cursor: pointer; }
+      .refuel-add ha-icon { --mdc-icon-size: 16px; }
+      .refuel-add:hover { border-color: color-mix(in srgb, var(--voc-blue) 40%, var(--voc-line)); color: var(--voc-blue); }
       .feedback {
         position: absolute;
         z-index: 8;
@@ -1341,6 +1667,7 @@ if (!window.customCards.some((card) => card.type === "volvo-car-card")) {
           vin: match[1].toUpperCase(),
           name: "S90 T8",
           model: "s90_t8",
+          tank_capacity: DEFAULT_TANK_CAPACITY,
           show_controls: true,
           show_statistics: true,
         },

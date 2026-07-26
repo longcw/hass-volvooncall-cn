@@ -185,6 +185,9 @@
             "fuel_consumption_at": {
                 "name": "{nickname} Fuel Consumption AT"
             },
+            "fuel_consumption_measured": {
+                "name": "{nickname} Fuel Consumption (measured)"
+            },
             "trip_meter_manual": {
                 "name": "{nickname} Trip Meter TM"
             },

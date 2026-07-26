@@ -88,6 +88,23 @@ HACS -> 集成 -> 右上角三个点 -> 自定义存储库
 | `binary_sensor.{vin}_front_right_tyre_pressure_warning` | 右前胎压警告 | |
 | `binary_sensor.{vin}_rear_left_tyre_pressure_warning` | 左后胎压警告 | |
 | `binary_sensor.{vin}_rear_right_tyre_pressure_warning` | 右后胎压警告 | |
+| `sensor.{vin}_fuel_consumption_measured` | 实测油耗 | 由加油记录算出的两次加油之间的真实百公里油耗，记录列表在 `records` 属性中 |
+
+## 加油记录与实测油耗
+
+车机上报的百公里油耗来自行车电脑，与实际加油量常有出入。集成会在油量出现跳升（≥ 5 升）时自动记一笔加油，并同时记下当时的总里程；下一次加油时，用「本次加油量 ÷ 两次加油之间的里程 × 100」得出实测油耗。
+
+由于油量传感器本身不准，可以把每笔记录的升数改成加油站的实际数值（例如 40.82 升）。在车辆卡片的「实测油耗」一行点开即可修改、删除或手动补记，也可以直接调用以下服务：
+
+| 服务 | 说明 |
+| --- | --- |
+| `volvooncall_cn.log_refuel` | 手动补记一次加油，参数 `vin`、`liters`，可选 `odometer` |
+| `volvooncall_cn.update_refuel` | 修正某笔记录，参数 `vin`、`record_id`，可选 `liters`、`odometer` |
+| `volvooncall_cn.delete_refuel` | 删除某笔记录，参数 `vin`、`record_id` |
+
+> 该算法以「每次都加满」为前提。中途只加一部分油时，这一箱与下一箱的数值会偏离，之后会自动回到正常值。
+
+车辆卡片的油量百分比需要知道油箱容积，在卡片配置中通过「油箱容积」设置（默认 71 升）。
 
 ## 测试车型
 

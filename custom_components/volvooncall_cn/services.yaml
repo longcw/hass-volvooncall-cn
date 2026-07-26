@@ -1,0 +1,98 @@
+log_refuel:
+  name: 记录加油 (Log refuel)
+  description: >-
+    Add a fill-up the automatic detector missed. Consumption for the tank is
+    computed from the distance driven since the previous record.
+  fields:
+    vin:
+      name: VIN
+      description: Vehicle the record belongs to.
+      required: true
+      example: YV1LFH5F3S1388274
+      selector:
+        text:
+    liters:
+      name: 加油量 (Litres)
+      description: Litres put in, as charged by the pump.
+      required: true
+      example: 40.82
+      selector:
+        number:
+          min: 1
+          max: 200
+          step: 0.01
+          unit_of_measurement: L
+          mode: box
+    odometer:
+      name: 里程 (Odometer)
+      description: Odometer at the fill-up. Defaults to the current reading.
+      example: 9387.4
+      selector:
+        number:
+          min: 0
+          max: 1000000
+          step: 0.1
+          unit_of_measurement: km
+          mode: box
+
+update_refuel:
+  name: 修正加油记录 (Update refuel record)
+  description: >-
+    Correct a record — normally the litres, because the tank sensor's estimate
+    differs from what the pump charged for.
+  fields:
+    vin:
+      name: VIN
+      description: Vehicle the record belongs to.
+      required: true
+      example: YV1LFH5F3S1388274
+      selector:
+        text:
+    record_id:
+      name: 记录 ID (Record ID)
+      description: The record's id, from the fuel_consumption_measured sensor's records attribute.
+      required: true
+      example: "2026-07-26T08:30:00+08:00"
+      selector:
+        text:
+    liters:
+      name: 加油量 (Litres)
+      description: Corrected litres.
+      example: 40.82
+      selector:
+        number:
+          min: 1
+          max: 200
+          step: 0.01
+          unit_of_measurement: L
+          mode: box
+    odometer:
+      name: 里程 (Odometer)
+      description: Corrected odometer reading.
+      example: 9387.4
+      selector:
+        number:
+          min: 0
+          max: 1000000
+          step: 0.1
+          unit_of_measurement: km
+          mode: box
+
+delete_refuel:
+  name: 删除加油记录 (Delete refuel record)
+  description: Remove a refuel record, e.g. one a gauge glitch created.
+  fields:
+    vin:
+      name: VIN
+      description: Vehicle the record belongs to.
+      required: true
+      example: YV1LFH5F3S1388274
+      selector:
+        text:
+    record_id:
+      name: 记录 ID (Record ID)
+      description: The record's id, from the fuel_consumption_measured sensor's records attribute.
+      required: true
+      example: "2026-07-26T08:30:00+08:00"
+      selector:
+        text:
