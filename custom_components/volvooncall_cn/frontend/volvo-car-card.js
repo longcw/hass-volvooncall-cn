@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.9.0";
+const CARD_VERSION = "2.9.1";
 
 // The API reports the tank in litres and never its size, so the fuel bar needs
 // a capacity to divide by. 71 L covers the XC60/XC90/S90 petrol range; override
@@ -351,17 +351,30 @@ class VolvoCarCard extends HTMLElement {
       .replaceAll("'", "&#039;");
   }
 
+  // Replacing the whole shadow DOM leaves the card empty for one layout pass.
+  // A card of zero height shrinks the page enough for the browser to clamp the
+  // scroll position, which throws the view back to the top on every click, so
+  // hold the old height until the new markup has laid out.
+  _paint(html) {
+    const height = this.offsetHeight;
+    if (height) this.style.minHeight = `${height}px`;
+    this.shadowRoot.innerHTML = html;
+    if (height) {
+      requestAnimationFrame(() => this.style.removeProperty("min-height"));
+    }
+  }
+
   _render() {
     if (!this.isConnected || !this._config) return;
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
 
     const vin = this._vin();
     if (!vin) {
-      this.shadowRoot.innerHTML = `${this._styles()}
+      this._paint(`${this._styles()}
         <ha-card class="setup-card">
           <ha-icon icon="mdi:car-cog"></ha-icon>
           <div><strong>配置 Volvo 车辆卡片</strong><span>请填写 VIN。</span></div>
-        </ha-card>`;
+        </ha-card>`);
       return;
     }
 
@@ -386,7 +399,7 @@ class VolvoCarCard extends HTMLElement {
     ].filter(Boolean);
     const animateIn = !this._hasRenderedVehicle && Boolean(this._hass);
 
-    this.shadowRoot.innerHTML = `${this._styles()}
+    this._paint(`${this._styles()}
       <ha-card class="${animateIn ? "animate-in" : ""}">
         <div class="hero">
           <div class="identity">
@@ -514,7 +527,7 @@ class VolvoCarCard extends HTMLElement {
         <div class="feedback" role="status" aria-live="polite" hidden>
           <ha-icon icon="mdi:check-circle"></ha-icon><span></span>
         </div>
-      </ha-card>`;
+      </ha-card>`);
 
     this._bindEvents();
     if (this._hass) this._hasRenderedVehicle = true;
