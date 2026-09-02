@@ -31,7 +31,6 @@ const ENTITY_DEFINITIONS = {
   fuel_measured: ["sensor", "fuel_consumption_measured"],
   battery: ["sensor", "battery_charge_level"],
   electric_range: ["sensor", "electric_range"],
-  full_charge_range: ["sensor", "full_charge_electric_range"],
   charging_status: ["sensor", "charging_status"],
   // Remapped to hass-volvooncall-cn (longcw fork) entity IDs.
   charger_connection: ["binary_sensor", "charger_connected"],
@@ -279,8 +278,6 @@ class VolvoCarCard extends HTMLElement {
         return [
           entityId || "",
           state?.state || "missing",
-          attrs.sample_count || "",
-          attrs.sampled_at || "",
           // Refuel log: a corrected record can leave the state untouched while
           // the history behind it changes.
           attrs.record_count || "",
@@ -1444,7 +1441,7 @@ class VolvoCarCard extends HTMLElement {
         transition: background-color .16s ease, color .16s ease;
       }
       /* Row labels match the section heading (车辆状态): 11px / 600 / text color,
-         so 发动机 / 充电状态 / 最近满电 read consistently with the headings. */
+         so 发动机 / 充电状态 read consistently with the headings. */
       .row-label { min-width: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--voc-text); }
       .row-label ha-icon { --mdc-icon-size: 14px; color: var(--voc-secondary); }
       .state-row strong {
@@ -1715,7 +1712,7 @@ if (!window.customCards.some((card) => card.type === "volvo-car-card")) {
     documentationURL: "https://github.com/Annincikee/hass-volvooncall-cn",
     getEntitySuggestion: (_hass, entityId) => {
       const match = entityId.match(
-        /^(?:lock|sensor|binary_sensor|switch)\.([a-z0-9]+)_(?:lock|engine|climatization|battery_charge_level|full_charge_electric_range|tm_distance|fuel_amount)$/,
+        /^(?:lock|sensor|binary_sensor|switch)\.([a-z0-9]+)_(?:lock|engine|climatization|battery_charge_level|tm_distance|fuel_amount)$/,
       );
       if (!match) return null;
       return {

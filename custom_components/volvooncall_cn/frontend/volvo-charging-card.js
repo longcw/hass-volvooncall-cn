@@ -4,7 +4,6 @@ const CARD_VERSION = "1.2.2";
 const ENTITY_DEFINITIONS = {
   battery: ["sensor", "battery_charge_level"],
   electric_range: ["sensor", "electric_range"],
-  full_charge_range: ["sensor", "full_charge_electric_range"],
   charging_status: ["sensor", "charging_status"],
   // longcw exposes the home-pile connector status (Chinese label) + pile
   // details as attributes here; used for the connection label.
@@ -163,7 +162,6 @@ class VolvoChargingCard extends HTMLElement {
           entityId || "",
           state?.state || "missing",
           attrs.last_charge_order?.order_no || "",
-          attrs.sampled_at || "",
         ].join(":");
       })
       .join("|");
@@ -328,13 +326,6 @@ class VolvoChargingCard extends HTMLElement {
             <button data-more-info="${this._escape(this._entityId("electric_range"))}">
               <ha-icon icon="mdi:map-marker-distance"></ha-icon>纯电续航 <strong>${this._escape(this._displayState("electric_range"))}</strong>
             </button>
-            ${
-              this._isAvailable("full_charge_range")
-                ? `<button data-more-info="${this._escape(this._entityId("full_charge_range"))}">
-                     <ha-icon icon="mdi:battery-check"></ha-icon>满电可跑 <strong>${this._escape(this._displayState("full_charge_range"))}</strong>
-                   </button>`
-                : ""
-            }
           </div>
         </div>
 
@@ -479,17 +470,6 @@ class VolvoChargingCard extends HTMLElement {
           "行程电耗 (TM)",
           this._displayState("tm_energy"),
           "tm_energy",
-        ),
-      );
-    }
-    if (this._isAvailable("full_charge_range")) {
-      const sampledAt = this._state("full_charge_range")?.attributes?.sampled_at;
-      rows.push(
-        this._statRow(
-          "mdi:battery-check",
-          "最近满电续航",
-          `${this._displayState("full_charge_range")}${sampledAt ? ` · ${this._formatOrderTime(sampledAt)}` : ""}`,
-          "full_charge_range",
         ),
       );
     }

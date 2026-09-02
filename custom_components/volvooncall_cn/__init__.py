@@ -2,7 +2,6 @@ from datetime import timedelta
 import logging
 import asyncio
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 import voluptuous as vol
@@ -435,21 +434,6 @@ class VolvoCoordinator(DataUpdateCoordinator):
                         store_data = VolvoStore(self.hass, vin)
                         await store_data.load_create_data()
                         self._stores_by_vin[vin] = store_data
-
-                    # Snapshot the electric range once per 100% charge session
-                    # for long-term battery-health statistics.
-                    if getattr(vehicle, "has_battery", False):
-                        try:
-                            await store_data.async_capture_full_charge_range(
-                                battery_level=vehicle.battery_charge_level,
-                                electric_range=vehicle.electric_range,
-                                sampled_at=datetime.now(timezone.utc).isoformat(),
-                                data_source="battery_grpc",
-                            )
-                        except Exception as err:
-                            _LOGGER.warning(
-                                "Full-charge range capture failed for %s: %s", vin, err
-                            )
 
                     # Trailing-30-day + monthly driving distance from validated
                     # odometer snapshots kept in the store (forward-only).
@@ -897,14 +881,6 @@ metaMap = {
         "icon": "mdi:timer-outline",
         "unit": "min",
         "entity_id": "estimated_charging_time",
-        "state_class": "measurement",
-    },
-    "full_charge_electric_range": {
-        "name": "Full Charge Electric Range",
-        "device_class": "distance",
-        "icon": "mdi:map-marker-distance",
-        "unit": "km",
-        "entity_id": "full_charge_electric_range",
         "state_class": "measurement",
     },
     "charging_voltage": {

@@ -230,9 +230,6 @@
             "estimated_charging_time": {
                 "name": "{nickname} Estimated Charging Time"
             },
-            "full_charge_electric_range": {
-                "name": "{nickname} Full Charge Electric Range"
-            },
             "home_pile_connector_status": {
                 "name": "{nickname} Home Charger"
             },
