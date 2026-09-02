@@ -39,6 +39,7 @@ PLATFORMS = {
     "button": "button",
     "number": "number",
     "switch": "switch",
+    "time": "time",
 }
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +54,13 @@ BUNDLED_CARDS = (
     ("volvo-car-card.js", CARD_RESOURCE_PATH),
     ("volvo-charging-card.js", CHARGING_CARD_RESOURCE_PATH),
 )
+
+# Daily charge-timer policy. The battery must sit at least the deadband below
+# the charge limit before the timer books a session — a couple of percent is not
+# worth one — and the timer only fires this long after its time, so a Home
+# Assistant that was down all night does not start charging at breakfast.
+CHARGE_TIMER_DEADBAND = 5
+CHARGE_TIMER_GRACE = timedelta(minutes=60)
 
 # Services for the refuel log (see services.yaml).
 SERVICE_LOG_REFUEL = "log_refuel"
@@ -392,6 +400,61 @@ class VolvoCoordinator(DataUpdateCoordinator):
                     _LOGGER.error(f"All {max_retries + 1} attempts failed: {err}")
                     raise last_error
 
+    async def _apply_charge_timer(self, vehicle, store_data, now):
+        """Start the home charge once a day at the user's time, when it is worth it.
+
+        The timer only ever starts a charge: a session started or stopped by hand
+        (or by plug-and-charge) is never touched. The battery has to sit a
+        deadband below the charge limit, so a car left plugged in overnight that
+        is already at the ceiling stays as it is and the timer re-arms for
+        tomorrow.
+        """
+        if not store_data.get("charge_timer_enabled"):
+            return
+        today = now.date().isoformat()
+        if store_data.get("charge_timer_last_run") == today:
+            return
+        start = store_data.get_charge_timer_start()
+        trigger = dt_util.start_of_local_day(now).replace(
+            hour=start.hour, minute=start.minute
+        )
+        if now < trigger or now - trigger > CHARGE_TIMER_GRACE:
+            return
+
+        # The pile is bound to the account, so a plugged pile can be plugged into
+        # another car; the car's own connector state is what proves this cable is
+        # in this car. Either way an unplugged car leaves the day unspent, so one
+        # plugged in a few minutes late still charges tonight.
+        if not vehicle.home_pile_plugged:
+            return
+        if not (vehicle.charger_connected or store_data.get("charge_timer_any_car")):
+            return
+        if vehicle.home_pile_charging:
+            # Already charging: nothing to start, and the day is spent so that
+            # stopping it by hand a minute later is not overridden.
+            await store_data.update(charge_timer_last_run=today)
+            return
+
+        limit = store_data.get_charge_limit()
+        level = vehicle.battery_charge_level
+        if level is None:
+            return  # battery level unknown: decide on a later poll, not blind
+        if float(level) > limit - CHARGE_TIMER_DEADBAND:
+            _LOGGER.debug(
+                "Charge timer for %s: %.0f%% is within %s%% of the %s%% limit, "
+                "not charging",
+                vehicle.vin, float(level), CHARGE_TIMER_DEADBAND, limit,
+            )
+            await store_data.update(charge_timer_last_run=today)
+            return
+
+        _LOGGER.info(
+            "Charge timer %s reached for %s (%.0f%%, limit %s%%); starting home charge",
+            start.strftime("%H:%M"), vehicle.vin, float(level), limit,
+        )
+        await vehicle.home_pile_charge_start()
+        await store_data.update(charge_timer_last_run=today)
+
     async def _async_update_data(self):
         """Fetch data from API endpoint with retry and caching support."""
         try:
@@ -492,6 +555,15 @@ class VolvoCoordinator(DataUpdateCoordinator):
                         _LOGGER.warning(
                             "Charge-limit auto-stop failed for %s: %s", vin, err
                         )
+
+                    # Daily timed home charge.
+                    try:
+                        if getattr(vehicle, "has_home_pile", False):
+                            await self._apply_charge_timer(
+                                vehicle, store_data, dt_util.now()
+                            )
+                    except Exception as err:
+                        _LOGGER.warning("Charge timer failed for %s: %s", vin, err)
 
                     store_datas.append(store_data)
 
@@ -702,6 +774,13 @@ metaMap = {
         "unit": "%",
         "entity_id": "charge_limit",
     },
+    "charge_timer_start_time": {
+        "name": "Charge Timer Start",
+        "device_class": None,
+        "icon": "mdi:clock-time-eight-outline",
+        "unit": "",
+        "entity_id": "charge_timer_start",
+    },
     "engine_switch": {
         "name": "Engine Remote control",
         "device_class": None,
@@ -757,6 +836,20 @@ metaMap = {
         "icon": "mdi:ev-plug-type2",
         "unit": "",
         "entity_id": "plug_and_charge",
+    },
+    "charge_timer_switch": {
+        "name": "Charge Timer",
+        "device_class": None,
+        "icon": "mdi:clock-check-outline",
+        "unit": "",
+        "entity_id": "charge_timer",
+    },
+    "charge_timer_any_car_switch": {
+        "name": "Charge Timer Any Car",
+        "device_class": None,
+        "icon": "mdi:car-multiple",
+        "unit": "",
+        "entity_id": "charge_timer_any_car",
     },
     "service_warning_msg": {
         "name": "Service Warning Message",

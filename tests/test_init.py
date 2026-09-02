@@ -276,7 +276,7 @@ class TestPlatformLoading:
                     # Verify all expected platforms are present
                     expected_platforms = {
                         "sensor", "binary_sensor", "device_tracker",
-                        "lock", "button", "number", "switch"
+                        "lock", "button", "number", "switch", "time"
                     }
                     assert set(platforms.keys()) == expected_platforms
 

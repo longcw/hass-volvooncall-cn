@@ -126,6 +126,12 @@
             },
             "charging_switch": {
                 "name": "{nickname}充电"
+            },
+            "charge_timer_switch": {
+                "name": "{nickname}定时充电"
+            },
+            "charge_timer_any_car_switch": {
+                "name": "{nickname}定时充电不限车辆"
             }
         },
         "button": {
@@ -260,6 +266,11 @@
             },
             "position_wgs84": {
                 "name": "{nickname}位置"
+            }
+        },
+        "time": {
+            "charge_timer_start_time": {
+                "name": "{nickname}定时充电开始时间"
             }
         }
     }

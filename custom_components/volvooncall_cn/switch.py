@@ -32,6 +32,8 @@ async def async_setup_entry(
         if ent.get("has_battery") and ent.get("has_home_pile"):
             switchs.append(VolvoChargingSwitch(coordinator, idx, "charging_switch"))
             switchs.append(VolvoPlugAndChargeSwitch(coordinator, idx, "plug_and_charge_switch"))
+            switchs.append(VolvoChargeTimerSwitch(coordinator, idx, "charge_timer_switch"))
+            switchs.append(VolvoChargeTimerAnyCarSwitch(coordinator, idx, "charge_timer_any_car_switch"))
 
     async_add_entities(switchs)
 
@@ -153,6 +155,52 @@ class VolvoPlugAndChargeSwitch(VolvoEntity, SwitchEntity):
         self._optimistic = False
         self.async_write_ha_state()
         await self.coordinator.async_force_refresh()
+
+
+class VolvoStoreSwitch(VolvoEntity, SwitchEntity):
+    """A setting the integration keeps for itself, so no command is sent to the
+    car and the state is whatever was last stored."""
+
+    store_key = ""
+
+    def __init__(self, coordinator, idx, metaKey):
+        super().__init__(coordinator, idx, metaKey, Platform.SWITCH)
+
+    @property
+    def is_on(self):
+        return bool(self.coordinator.store_datas[self.idx].get(self.store_key))
+
+    async def async_turn_on(self) -> None:
+        await self._store(True)
+
+    async def async_turn_off(self) -> None:
+        await self._store(False)
+
+    async def _store(self, value):
+        await self.coordinator.store_datas[self.idx].update(**{self.store_key: value})
+        self.async_write_ha_state()
+
+
+class VolvoChargeTimerSwitch(VolvoStoreSwitch):
+    """Daily timed home charge: at the set time the coordinator starts a charge
+    if the cable is in and the battery sits below the charge limit's deadband."""
+
+    store_key = "charge_timer_enabled"
+
+    @property
+    def extra_state_attributes(self):
+        """``last_run`` is the day the timer last decided, so a card can tell
+        "will charge at 23:00" from "already handled today"."""
+        store_data = self.coordinator.store_datas[self.idx]
+        return {"last_run": store_data.get("charge_timer_last_run")}
+
+
+class VolvoChargeTimerAnyCarSwitch(VolvoStoreSwitch):
+    """Let the timer fire on the wallbox's plugged state alone. The wallbox is
+    bound to the account rather than to a car, so by default the timer also
+    wants the car itself to report the connector in."""
+
+    store_key = "charge_timer_any_car"
 
 
 class VolvoTailgateSwitch(VolvoSwitchEntity):

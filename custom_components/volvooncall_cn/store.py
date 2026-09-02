@@ -1,7 +1,7 @@
 
 import logging
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import TypedDict, Unpack
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -13,6 +13,9 @@ STORE_VERSION = 1
 # 100 disables the limit so charging behaves exactly as before (charge to full).
 CHARGE_LIMIT_DISABLED = 100
 CHARGE_LIMIT_MIN = 50
+
+# Daily charge timer: when the coordinator checks whether to start a charge.
+DEFAULT_CHARGE_TIMER_START = time(23, 0)
 
 # How much odometer history to keep for the trailing-30-day + monthly charts.
 _ODO_DAILY_KEEP = 45          # days
@@ -69,6 +72,11 @@ class StoreData(TypedDict, total=False):
     """Volvo Store Data"""
     engine_duration_number: int
     charge_limit: int
+    # Daily timed home charge (see _apply_charge_timer in __init__.py).
+    charge_timer_enabled: bool
+    charge_timer_start: str      # "HH:MM", local time
+    charge_timer_any_car: bool   # fire on the pile's plugged state alone
+    charge_timer_last_run: str   # "YYYY-MM-DD", the day the timer last decided
     # Odometer snapshots for forward-only distance stats.
     odometer_max: float
     odometer_daily: dict     # {"YYYY-MM-DD": km}
@@ -120,6 +128,22 @@ class VolvoStore(Store[StoreData]):
     async def set_charge_limit(self, value):
         limit = min(max(int(value), CHARGE_LIMIT_MIN), CHARGE_LIMIT_DISABLED)
         await self.update(charge_limit=limit)
+
+    def get_charge_timer_start(self) -> time:
+        """Daily start time of the timed charge; the default when unset or corrupt."""
+        self.data = self.data or self.default_data
+        raw = self.data.get("charge_timer_start")
+        if isinstance(raw, str):
+            try:
+                return time.fromisoformat(raw)
+            except ValueError:
+                pass
+        return DEFAULT_CHARGE_TIMER_START
+
+    async def set_charge_timer_start(self, value):
+        """``value`` is a ``datetime.time`` or an ISO ``HH:MM[:SS]`` string."""
+        parsed = value if isinstance(value, time) else time.fromisoformat(str(value))
+        await self.update(charge_timer_start=parsed.strftime("%H:%M"))
 
     async def record_odometer(self, odometer, now):
         """Record a validated odometer reading into the daily + monthly snapshots.

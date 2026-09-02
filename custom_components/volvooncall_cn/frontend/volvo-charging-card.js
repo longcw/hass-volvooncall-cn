@@ -1,4 +1,4 @@
-const CARD_VERSION = "1.2.2";
+const CARD_VERSION = "1.4.0";
 
 // Remapped to hass-volvooncall-cn (longcw fork) entity IDs.
 const ENTITY_DEFINITIONS = {
@@ -17,6 +17,12 @@ const ENTITY_DEFINITIONS = {
   home_charge: ["switch", "charging"],
   plug_and_charge: ["switch", "plug_and_charge"],
   charge_limit: ["number", "charge_limit"],
+  charge_timer: ["switch", "charge_timer"],
+  charge_timer_any_car: ["switch", "charge_timer_any_car"],
+  charge_timer_start: ["time", "charge_timer_start"],
+  // The timer checks both sides of the cable, so the card can too.
+  home_pile_plugged: ["binary_sensor", "home_charger_plugged"],
+  car_plugged: ["binary_sensor", "charger_connected"],
   distance_30d: ["sensor", "distance_last_30d"],
   energy_30d: ["sensor", "energy_last_30d"],
 };
@@ -52,6 +58,31 @@ const CONNECTION_LABELS = {
   unknown: "未知",
 };
 
+// Per-toggle confirmation prompt (car/wallbox commands only) and feedback text.
+const ACTION_FEEDBACK = {
+  home_charge: {
+    confirmOn: "确认开始家充？",
+    confirmOff: "确认停止家充？",
+    on: "家充启动指令已发送",
+    off: "家充停止指令已发送",
+  },
+  plug_and_charge: {
+    confirmOn: "确认开启即插即充？",
+    confirmOff: "确认关闭即插即充？",
+    on: "即插即充已开启",
+    off: "即插即充已关闭",
+  },
+  charge_timer: { on: "定时充电已开启", off: "定时充电已关闭" },
+  charge_timer_any_car: {
+    on: "定时充电已改为不限车辆",
+    off: "定时充电需车辆确认已插枪",
+  },
+};
+
+// Battery has to be this far below the charge limit for the timer to start a
+// charge; mirrors CHARGE_TIMER_DEADBAND in the integration.
+const TIMER_DEADBAND = 5;
+
 const LABELS = {
   vin: "车辆 VIN",
   name: "卡片标题",
@@ -65,6 +96,7 @@ class VolvoChargingCard extends HTMLElement {
     this._pendingActions = new Set();
     this._feedbackTimer = undefined;
     this._limitDragging = false;
+    this._timerEditing = false;
     this._hasRendered = false;
   }
 
@@ -104,7 +136,7 @@ class VolvoChargingCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (this._limitDragging) return;
+    if (this._limitDragging || this._timerEditing) return;
     if (this.shadowRoot?.querySelector(".confirm-dialog[open]")) return;
     const signature = this._stateSignature(hass);
     if (signature === this._lastStateSignature && this.shadowRoot) return;
@@ -162,6 +194,7 @@ class VolvoChargingCard extends HTMLElement {
           entityId || "",
           state?.state || "missing",
           attrs.last_charge_order?.order_no || "",
+          attrs.last_run || "",
         ].join(":");
       })
       .join("|");
@@ -221,6 +254,56 @@ class VolvoChargingCard extends HTMLElement {
   _chargeLimit() {
     const value = this._stateNumber("charge_limit");
     return Number.isFinite(value) ? Math.max(50, Math.min(100, value)) : 100;
+  }
+
+  _timerStart() {
+    const raw = String(this._state("charge_timer_start")?.state || "");
+    return /^\d{2}:\d{2}/.test(raw) ? raw.slice(0, 5) : "23:00";
+  }
+
+  _timerVerdict(limit, timerOn, anyCarOn, start) {
+    if (!timerOn) {
+      return {
+        tone: "",
+        icon: "mdi:information-outline",
+        text: `开启后每日 ${start} 自动判断是否需要家充`,
+      };
+    }
+    const threshold = Math.max(0, limit - TIMER_DEADBAND);
+    const battery = this._stateNumber("battery");
+    const pilePlugged = this._state("home_pile_plugged")?.state === "on";
+    const carPlugged = this._state("car_plugged")?.state === "on";
+    const charging = this._state("home_charge")?.state === "on";
+    const lastRun = this._state("charge_timer")?.attributes?.last_run;
+    const today = new Date().toLocaleDateString("sv");  // YYYY-MM-DD
+
+    if (lastRun === today) {
+      return { tone: "", icon: "mdi:check-decagram-outline", text: `今天已判断过，明天 ${start} 再检查` };
+    }
+    if (charging) {
+      return { tone: "", icon: "mdi:flash", text: "正在充电，定时不会干预" };
+    }
+    if (!pilePlugged) {
+      return { tone: "warn", icon: "mdi:power-plug-off", text: `${start} 不会充电：家充桩未插枪` };
+    }
+    if (!carPlugged && !anyCarOn) {
+      return { tone: "warn", icon: "mdi:car-off", text: `${start} 不会充电：本车未确认插枪` };
+    }
+    if (!Number.isFinite(battery)) {
+      return { tone: "", icon: "mdi:help-circle-outline", text: `电量未知，${start} 按当时电量判断` };
+    }
+    if (battery > threshold) {
+      return {
+        tone: "warn",
+        icon: "mdi:battery-check",
+        text: `${start} 不会充电：电量 ${Math.round(battery)}% 高于 ${threshold}%`,
+      };
+    }
+    return {
+      tone: "ok",
+      icon: "mdi:play-circle-outline",
+      text: `${start} 将开始家充：电量 ${Math.round(battery)}%，充到 ${limit >= 100 ? "满" : `${limit}%`}`,
+    };
   }
 
   _formatMinutes(value) {
@@ -411,6 +494,7 @@ class VolvoChargingCard extends HTMLElement {
               : "电量达到上限后自动停止家充 · 拉到 100% 关闭该功能"
           }</small>
         </div>
+        ${this._timerRow(limit)}
         <div class="control-buttons">
           <button class="control home ${homeOn ? "active" : ""} ${homePending ? "pending" : ""}"
                   data-action="home_charge"
@@ -427,6 +511,53 @@ class VolvoChargingCard extends HTMLElement {
             <span>${pncOn ? "即插即充 开" : "即插即充 关"}</span>
           </button>
         </div>
+      </div>`;
+  }
+
+  _timerRow(limit) {
+    const timer = this._state("charge_timer");
+    const available = timer && timer.state !== "unavailable";
+    const timerOn = timer?.state === "on";
+    const timerPending = this._pendingActions.has("charge_timer");
+    const anyCarOn = this._state("charge_timer_any_car")?.state === "on";
+    const anyCarPending = this._pendingActions.has("charge_timer_any_car");
+    const start = this._timerStart();
+    const verdict = this._timerVerdict(limit, timerOn, anyCarOn, start);
+
+    return `
+      <div class="timer-row ${available ? "" : "missing"}">
+        <div class="timer-head">
+          <span><ha-icon icon="mdi:clock-time-eight-outline"></ha-icon>定时充电</span>
+          <button class="timer-toggle ${timerOn ? "active" : ""}"
+                  data-action="charge_timer"
+                  ${available && !timerPending ? "" : "disabled"}
+                  aria-busy="${timerPending}">${timerOn ? "已开启" : "已关闭"}</button>
+        </div>
+        <div class="timer-body">
+          <label class="timer-time">每日
+            <input type="time" step="60" value="${start}"
+                   ${available ? "" : "disabled"} aria-label="定时充电开始时间" />
+          </label>
+          <button class="timer-any ${anyCarOn ? "active" : ""}"
+                  data-action="charge_timer_any_car"
+                  ${available && !anyCarPending ? "" : "disabled"}
+                  aria-busy="${anyCarPending}">
+            <ha-icon icon="mdi:car-multiple"></ha-icon>不限车辆
+          </button>
+        </div>
+        <div class="timer-verdict ${verdict.tone}">
+          <ha-icon icon="${verdict.icon}"></ha-icon><span>${verdict.text}</span>
+        </div>
+        <small>${
+          timerOn
+            ? `每日检查一次，电量需低于上限 ${TIMER_DEADBAND}% 才开始，不会打断手动充电`
+            : `到点若已插枪且电量低于上限 ${TIMER_DEADBAND}% 则自动开始家充`
+        }</small>
+        <small>${
+          anyCarOn
+            ? "仅看家充桩是否已插枪，不校验车辆"
+            : "需家充桩与本车都显示已插枪"
+        }</small>
       </div>`;
   }
 
@@ -554,6 +685,32 @@ class VolvoChargingCard extends HTMLElement {
       element.addEventListener("click", () => this._runAction(element.dataset.action));
     });
 
+    const timeInput = this.shadowRoot.querySelector(".timer-time input");
+    if (timeInput) {
+      timeInput.addEventListener("focus", () => {
+        this._timerEditing = true;
+      });
+      timeInput.addEventListener("blur", () => {
+        this._timerEditing = false;
+      });
+      timeInput.addEventListener("change", async () => {
+        const value = timeInput.value;
+        if (!/^\d{2}:\d{2}$/.test(value)) return;
+        try {
+          await this._hass.callService("time", "set_value", {
+            entity_id: this._entityId("charge_timer_start"),
+            time: `${value}:00`,
+          });
+          this._showFeedback(`定时充电已设为每日 ${value}`);
+        } catch (error) {
+          this._showFeedback(`设置失败：${error?.message || error}`, "error");
+        }
+        this._timerEditing = false;
+        this._lastStateSignature = undefined;
+        this._render();
+      });
+    }
+
     const slider = this.shadowRoot.querySelector(".limit-slider");
     if (slider) {
       const preview = () => {
@@ -594,12 +751,8 @@ class VolvoChargingCard extends HTMLElement {
 
     const turnOn = stateObj.state !== "on";
     const service = turnOn ? "turn_on" : "turn_off";
-    let message = null;
-    if (key === "home_charge") {
-      message = turnOn ? "确认开始家充？" : "确认停止家充？";
-    } else if (key === "plug_and_charge") {
-      message = turnOn ? "确认开启即插即充？" : "确认关闭即插即充？";
-    }
+    const feedback = ACTION_FEEDBACK[key] || {};
+    const message = turnOn ? feedback.confirmOn : feedback.confirmOff;
 
     if (message && !(await this._confirm(message))) return;
     this._pendingActions.add(key);
@@ -608,11 +761,7 @@ class VolvoChargingCard extends HTMLElement {
     let feedbackTone = "success";
     try {
       await this._hass.callService("switch", service, { entity_id: entityId });
-      if (key === "home_charge") {
-        feedbackMessage = turnOn ? "家充启动指令已发送" : "家充停止指令已发送";
-      } else {
-        feedbackMessage = turnOn ? "即插即充已开启" : "即插即充已关闭";
-      }
+      feedbackMessage = (turnOn ? feedback.on : feedback.off) || feedbackMessage;
     } catch (error) {
       feedbackMessage = `操作失败：${error?.message || error}`;
       feedbackTone = "error";
@@ -944,6 +1093,68 @@ class VolvoChargingCard extends HTMLElement {
         box-shadow: 0 1px 4px rgba(0,0,0,.25);
       }
       .limit-row small { display: block; margin-top: 5px; color: var(--voc-secondary); font-size: 9px; }
+      .timer-row {
+        margin-top: 9px;
+        border: 1px solid var(--voc-line-soft);
+        border-radius: 13px;
+        padding: 12px 14px 11px;
+        background: var(--voc-surface);
+      }
+      .timer-row.missing { opacity: .45; }
+      .timer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--voc-secondary); }
+      .timer-head > span { display: inline-flex; align-items: center; gap: 5px; }
+      .timer-head ha-icon { --mdc-icon-size: 15px; color: var(--voc-blue); }
+      .timer-toggle, .timer-any {
+        border: 1px solid var(--voc-line-soft);
+        border-radius: 999px;
+        padding: 4px 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: var(--voc-bg);
+        color: var(--voc-secondary);
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 550;
+        white-space: nowrap;
+        transition: border-color .18s ease, background-color .18s ease, color .18s ease;
+      }
+      .timer-toggle.active, .timer-any.active {
+        border-color: color-mix(in srgb, var(--voc-blue) 28%, transparent);
+        background: color-mix(in srgb, var(--voc-blue) 8%, var(--voc-bg));
+        color: var(--voc-accent);
+      }
+      .timer-any ha-icon { --mdc-icon-size: 13px; }
+      .timer-toggle:disabled, .timer-any:disabled { opacity: .35; cursor: default; }
+      .timer-body { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; }
+      .timer-time { display: inline-flex; align-items: center; gap: 6px; color: var(--voc-secondary); font-size: 10px; }
+      .timer-time input {
+        border: 1px solid var(--voc-line-soft);
+        border-radius: 9px;
+        padding: 5px 8px;
+        background: var(--voc-bg);
+        color: var(--voc-text);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .timer-time input:disabled { opacity: .5; }
+      .timer-verdict {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        margin-top: 9px;
+        color: var(--voc-secondary);
+        font-size: 10px;
+        font-weight: 550;
+      }
+      .timer-verdict ha-icon { --mdc-icon-size: 14px; flex: 0 0 auto; }
+      .timer-verdict.ok { color: var(--voc-success); }
+      .timer-verdict.ok ha-icon { color: var(--voc-positive); }
+      .timer-verdict.warn { color: var(--voc-orange); }
+      .timer-verdict.warn ha-icon { color: var(--voc-orange); }
+      .timer-row small { display: block; margin-top: 5px; color: var(--voc-secondary); font-size: 9px; }
       .control-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
       .control {
         min-width: 0;
@@ -1079,7 +1290,7 @@ class VolvoChargingCard extends HTMLElement {
       .setup-card div { display: flex; flex-direction: column; gap: 4px; }
       .setup-card strong { font-weight: 500; }
       .setup-card span { color: var(--voc-secondary); font-size: 12px; }
-      button:focus-visible, .limit-slider:focus-visible { outline: 2px solid var(--voc-blue); outline-offset: 2px; }
+      button:focus-visible, .limit-slider:focus-visible, .timer-time input:focus-visible { outline: 2px solid var(--voc-blue); outline-offset: 2px; }
       @media (hover: hover) {
         .tile:hover, .stat-row:hover { background: color-mix(in srgb, var(--voc-blue) 5%, var(--voc-surface)); }
         .control:not(:disabled):hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--voc-blue) 20%, var(--voc-line)); box-shadow: 0 10px 20px rgba(0, 0, 0, .08); }

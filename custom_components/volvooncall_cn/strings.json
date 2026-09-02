@@ -126,6 +126,12 @@
             },
             "charging_switch": {
                 "name": "{nickname} Charging"
+            },
+            "charge_timer_switch": {
+                "name": "{nickname} Charge Timer"
+            },
+            "charge_timer_any_car_switch": {
+                "name": "{nickname} Charge Timer Any Car"
             }
         },
         "button": {
@@ -246,6 +252,11 @@
             },
             "position_wgs84": {
                 "name": "{nickname} Position WGS84"
+            }
+        },
+        "time": {
+            "charge_timer_start_time": {
+                "name": "{nickname} Charge Timer Start"
             }
         }
     }
