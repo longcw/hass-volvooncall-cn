@@ -5,6 +5,7 @@ from datetime import date, datetime, time, timedelta
 from typing import TypedDict, Unpack
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from .fuel_price import price_on
 from .volvooncall_cn import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ _ODO_DAILY_KEEP = 45          # days
 _ODO_MONTHS_KEEP = 14         # calendar months
 _ODO_30D_TOLERANCE_DAYS = 12  # nearest snapshot to "30 days ago" must be this close
 
-# --- Refuel log (tank-to-tank fuel consumption) -----------------------------
+# --- Refuel log (per-tank fuel consumption and cost) ------------------------
 # A refill shows up as a jump in the reported tank level; anything smaller is
 # gauge noise (slosh on a slope, temperature drift, sensor rounding).
 REFUEL_MIN_DELTA_L = 5.0
@@ -382,18 +383,23 @@ class VolvoStore(Store[StoreData]):
                 "fuel_before": round(previous, 2),
                 "fuel_after": fuel,
                 "source": "auto",
+                "price": None,
+                "price_source": None,
             })
 
         await self._save_refuel_log(log, fuel_amount_last=fuel)
         return True
 
-    async def add_refuel(self, liters, odometer, when) -> dict | None:
+    async def add_refuel(
+        self, liters, odometer, when, fuel_before=None, price=None
+    ) -> dict | None:
         """Log a fill the detector missed — including a past one, hence ``when``.
 
         Returns the new record."""
         liters_value = _as_float(liters)
         if liters_value is None or liters_value <= 0:
             return None
+        price_value = _as_float(price)
         self.data = self.data or await self.load_create_data()
         log = self._refuel_log()
         timestamp = when.isoformat()
@@ -404,49 +410,74 @@ class VolvoStore(Store[StoreData]):
             "liters": round(liters_value, 2),
             "liters_sensor": None,
             "edited": True,
-            "fuel_before": None,
+            "fuel_before": _as_float(fuel_before),
             "fuel_after": None,
             "source": "manual",
+            "price": price_value,
+            "price_source": "manual" if price_value is not None else None,
         }
         log.append(record)
         await self._save_refuel_log(log)
         return record
 
     async def update_refuel(
-        self, record_id, liters=None, odometer=None, when=None
+        self, record_id, liters=None, odometer=None, when=None,
+        fuel_before=None, price=None,
     ) -> bool:
-        """Correct a record: the litres (to what the pump charged for), the
-        odometer, or when it happened.
+        """Correct a record from the pump receipt; the id survives a date change.
 
-        The id stays as issued, so a corrected date doesn't invalidate a
-        reference to the record. Records are ordered by ``at``, so moving a date
-        also moves which tank the next fill is measured against."""
+        Records are ordered by ``at``, so a new date also changes which tank the next fill measures."""
         self.data = self.data or await self.load_create_data()
         log = self._refuel_log()
-        liters_value = _as_float(liters)
-        odometer_value = _as_float(odometer)
-        if liters_value is not None and liters_value <= 0:
+        changes = {}
+        # litres and price must be positive; a reading of zero is valid
+        for key, value, allow_zero in (
+            ("liters", liters, False), ("odometer", odometer, True),
+            ("fuel_before", fuel_before, True), ("price", price, False),
+        ):
+            if value is None:
+                continue
+            number = _as_float(value)
+            if number is None or number < 0 or (number == 0 and not allow_zero):
+                return False
+            changes[key] = round(number, 2) if key in ("liters", "price") else number
+        if when is not None:
+            changes["at"] = when.isoformat()
+        if not changes:
             return False
-        if odometer_value is not None and odometer_value < 0:
-            return False
-        if liters_value is None and odometer_value is None and when is None:
-            return False
+        if "price" in changes:
+            changes["price_source"] = "manual"
 
         for index, record in enumerate(log):
             if record.get("id") != record_id:
                 continue
-            updated = dict(record)
-            if liters_value is not None:
-                updated["liters"] = round(liters_value, 2)
-            if odometer_value is not None:
-                updated["odometer"] = odometer_value
-            if when is not None:
-                updated["at"] = when.isoformat()
-            updated["edited"] = True
-            log[index] = updated
+            log[index] = {**record, **changes, "edited": True}
             await self._save_refuel_log(log)
             return True
         return False
+
+    def needs_refuel_prices(self) -> bool:
+        """True while some record still waits for a looked-up price."""
+        return any(
+            r.get("price") is None and r.get("price_source") != "manual"
+            for r in self._refuel_log()
+        )
+
+    async def apply_refuel_prices(self, history: dict) -> bool:
+        """Price unpriced records by the adjustment in force on their date; True if any changed."""
+        log = self._refuel_log()
+        changed = False
+        for index, record in enumerate(log):
+            if record.get("price") is not None or record.get("price_source") == "manual":
+                continue
+            at = _parse_dt(record.get("at"))
+            price = price_on(history, at.date()) if at else None
+            if price is not None:
+                log[index] = {**record, "price": price, "price_source": "auto"}
+                changed = True
+        if changed:
+            await self._save_refuel_log(log)
+        return changed
 
     async def delete_refuel(self, record_id) -> bool:
         self.data = self.data or await self.load_create_data()
@@ -458,52 +489,71 @@ class VolvoStore(Store[StoreData]):
         return True
 
     def get_refuel_stats(self) -> dict:
-        """Tank-to-tank consumption derived from the log.
+        """Per-tank consumption and cost from the log, records newest first.
 
-        The litres put in at fill *i* are exactly what was burned since fill
-        *i-1*, so ``liters[i] / (odometer[i] - odometer[i-1]) * 100`` is the
-        consumption for that tank. The first record has no predecessor, and any
-        segment that is too short or lands outside sane bounds is left blank
-        instead of publishing a nonsense figure.
-
-        Returns ``{"last", "average", "count", "records"}`` with records newest
-        first, each carrying its computed ``distance`` and ``consumption``."""
+        Fuel burned is ``before[i-1] + liters[i-1] - before[i]``, which holds for
+        partial fills and trusts the pump over the gauge's reading after a fill,
+        which sits at full for the top few litres."""
         records = []
-        previous_odometer = None
-        total_liters = 0.0
-        total_km = 0.0
+        previous = None
+        total_liters = total_km = 0.0
+        priced_cost = priced_km = 0.0
 
         for record in self._refuel_log():
             odometer = _as_float(record.get("odometer"))
             liters = _as_float(record.get("liters"))
-            distance = None
-            consumption = None
-            if previous_odometer is not None and odometer is not None:
-                km = round(odometer - previous_odometer, 1)
+            before = _as_float(record.get("fuel_before"))
+            price = _as_float(record.get("price"))
+            # without a level reading, assume every fill tops the tank up
+            after = (
+                round(before + liters, 2)
+                if before is not None and liters is not None
+                else _as_float(record.get("fuel_after"))
+            )
+            distance = fuel_used = consumption = cost_per_100km = None
+            if previous is not None and odometer is not None:
+                km = round(odometer - previous["odometer"], 1)
                 if km > 0:
                     distance = km
-                    if liters and km >= _REFUEL_MIN_SEGMENT_KM:
-                        value = round(liters / km * 100, 1)
+                    if previous["after"] is not None and before is not None:
+                        used = previous["after"] - before
+                    else:
+                        used = liters
+                    if used and used > 0 and km >= _REFUEL_MIN_SEGMENT_KM:
+                        value = round(used / km * 100, 1)
                         if _REFUEL_CONSUMPTION_MIN <= value <= _REFUEL_CONSUMPTION_MAX:
+                            fuel_used = round(used, 2)
                             consumption = value
-                            total_liters += liters
+                            total_liters += used
                             total_km += km
+                            # the burned fuel was bought at the previous fill
+                            tank_price = previous["price"] or price
+                            if tank_price:
+                                cost_per_100km = round(used * tank_price / km * 100, 1)
+                                priced_cost += used * tank_price
+                                priced_km += km
             records.append({
                 **record,
+                "level_after": after,
+                "cost": round(liters * price, 2) if liters and price else None,
                 "distance": distance,
+                "fuel_used": fuel_used,
                 "consumption": consumption,
+                "cost_per_100km": cost_per_100km,
             })
             if odometer is not None:
-                previous_odometer = odometer
+                previous = {"odometer": odometer, "after": after, "price": price}
 
-        last = next(
-            (r["consumption"] for r in reversed(records) if r["consumption"] is not None),
-            None,
-        )
-        average = round(total_liters / total_km * 100, 1) if total_km > 0 else None
+        def _last(key):
+            return next((r[key] for r in reversed(records) if r[key] is not None), None)
+
         return {
-            "last": last,
-            "average": average,
+            "last": _last("consumption"),
+            "average": round(total_liters / total_km * 100, 1) if total_km > 0 else None,
+            "last_cost_per_100km": _last("cost_per_100km"),
+            "average_cost_per_100km": (
+                round(priced_cost / priced_km * 100, 1) if priced_km > 0 else None
+            ),
             "count": len(records),
             "records": list(reversed(records)),
         }

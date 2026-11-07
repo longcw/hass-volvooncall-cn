@@ -96,26 +96,26 @@ async def test_consumption_is_litres_of_this_fill_over_distance_of_last_tank(has
 
 
 @pytest.mark.asyncio
-async def test_correcting_litres_reprices_the_tank_and_survives_polling(hass):
-    """The pump charged for 40.82 L; the tank sensor guessed 40.0."""
+async def test_pump_litres_set_what_the_tank_held(hass):
+    """The gauge sat at 71 L after a 50 L fill from 15 L; the pump is right."""
     store = await _store(hass, "REFUEL_EDIT")
     await store.record_fuel_amount(15.0, 9000.0, BASE)
     await store.record_fuel_amount(71.0, 9000.0, BASE + timedelta(minutes=1))
     await store.record_fuel_amount(31.0, 9500.0, BASE + timedelta(days=7))
     await store.record_fuel_amount(71.0, 9500.0, BASE + timedelta(days=7, minutes=1))
 
-    newest = store.get_refuel_stats()["records"][0]
-    assert newest["liters"] == 40.0
-
-    assert await store.update_refuel(newest["id"], liters=40.82) is True
-    corrected = store.get_refuel_stats()["records"][0]
-    assert corrected["liters"] == 40.82
-    assert corrected["liters_sensor"] == 40.0
-    assert corrected["edited"] is True
-    assert corrected["consumption"] == 8.2  # 40.82 / 500 km
+    oldest = store.get_refuel_stats()["records"][1]
+    assert await store.update_refuel(oldest["id"], liters=50.0) is True
+    newest, corrected = store.get_refuel_stats()["records"]
+    assert corrected["liters_sensor"] == 56.0
+    assert corrected["level_after"] == 65.0
+    assert newest["fuel_used"] == 34.0  # 65 left after the fill, 31 found
+    assert newest["consumption"] == 6.8
 
     # A later poll during the same window must not re-merge into (and undo)
     # a hand-corrected record.
+    newest_id = newest["id"]
+    assert await store.update_refuel(newest_id, liters=40.82) is True
     await store.record_fuel_amount(71.0, 9500.0, BASE + timedelta(days=7, minutes=2))
     assert store.get_refuel_stats()["records"][0]["liters"] == 40.82
 
@@ -123,7 +123,48 @@ async def test_correcting_litres_reprices_the_tank_and_survives_polling(hass):
     assert reloaded.get_refuel_stats()["records"][0]["liters"] == 40.82
 
     assert await store.update_refuel("no-such-record", liters=10) is False
-    assert await store.update_refuel(newest["id"], liters=0) is False
+    assert await store.update_refuel(newest_id, liters=0) is False
+
+
+@pytest.mark.asyncio
+async def test_partial_fill_counts_fuel_burned_not_fuel_added(hass):
+    """Topping up 25 L of a 60 L burn must not read as 25 L burned."""
+    store = await _store(hass, "REFUEL_PARTIAL")
+    await store.add_refuel(40.0, 9000.0, BASE, fuel_before=30.0)  # 70 L after
+    await store.add_refuel(25.0, 10000.0, BASE + timedelta(days=30), fuel_before=10.0)
+
+    newest = store.get_refuel_stats()["records"][0]
+    assert newest["fuel_used"] == 60.0
+    assert newest["consumption"] == 6.0
+    assert newest["level_after"] == 35.0
+
+
+@pytest.mark.asyncio
+async def test_cost_uses_the_price_the_burned_fuel_was_bought_at(hass):
+    store = await _store(hass, "REFUEL_COST")
+    await store.add_refuel(40.0, 9000.0, BASE, fuel_before=30.0)
+    second = await store.add_refuel(
+        50.0, 10000.0, BASE + timedelta(days=30), fuel_before=20.0, price=9.0
+    )
+    assert store.needs_refuel_prices() is True
+
+    history = {"2026-06-20": 7.5, "2026-07-20": 8.0}
+    assert await store.apply_refuel_prices(history) is True
+    stats = store.get_refuel_stats()
+    newest, oldest = stats["records"]
+    assert oldest["price"] == 7.5 and oldest["price_source"] == "auto"
+    assert oldest["cost"] == 300.0
+    # a receipt price is kept
+    assert newest["price"] == 9.0 and newest["cost"] == 450.0
+    # 50 L burned over 1000 km, bought at 7.5
+    assert newest["cost_per_100km"] == 37.5
+    assert stats["last_cost_per_100km"] == 37.5
+    assert stats["average_cost_per_100km"] == 37.5
+    assert store.needs_refuel_prices() is False
+
+    assert await store.update_refuel(second["id"], price=8.5) is True
+    assert store.get_refuel_stats()["records"][0]["cost"] == 425.0
+    assert await store.update_refuel(second["id"], price=0) is False
 
 
 @pytest.mark.asyncio

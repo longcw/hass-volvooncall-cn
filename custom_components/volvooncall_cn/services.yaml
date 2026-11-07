@@ -1,8 +1,8 @@
 log_refuel:
   name: 记录加油 (Log refuel)
   description: >-
-    Add a fill-up the automatic detector missed. Consumption for the tank is
-    computed from the distance driven since the previous record.
+    Add a fill-up the automatic detector missed. Consumption and cost for the
+    tank are computed from the distance driven since the previous record.
   fields:
     vin:
       name: VIN
@@ -42,12 +42,38 @@ log_refuel:
       example: "2026-07-20 08:30:00"
       selector:
         datetime:
+    fuel_before:
+      name: 加油前油量 (Fuel before)
+      description: >-
+        Tank level just before the fill, from the car. With it, consumption is
+        right even when the tank was not filled up.
+      example: 10.4
+      selector:
+        number:
+          min: 0
+          max: 200
+          step: 0.1
+          unit_of_measurement: L
+          mode: box
+    price:
+      name: 单价 (Unit price)
+      description: >-
+        Price per litre from the receipt. Without it, the provincial retail
+        price on that day is used when a province is set in the options.
+      example: 9.38
+      selector:
+        number:
+          min: 0.01
+          max: 50
+          step: 0.01
+          unit_of_measurement: 元/L
+          mode: box
 
 update_refuel:
   name: 修正加油记录 (Update refuel record)
   description: >-
-    Correct a record — normally the litres, because the tank sensor's estimate
-    differs from what the pump charged for.
+    Correct a record from the pump receipt — normally the litres or the unit
+    price, which the tank sensor and the retail price only estimate.
   fields:
     vin:
       name: VIN
@@ -93,6 +119,32 @@ update_refuel:
       example: "2026-07-20 08:30:00"
       selector:
         datetime:
+    fuel_before:
+      name: 加油前油量 (Fuel before)
+      description: >-
+        Tank level just before the fill, from the car. With it, consumption is
+        right even when the tank was not filled up.
+      example: 10.4
+      selector:
+        number:
+          min: 0
+          max: 200
+          step: 0.1
+          unit_of_measurement: L
+          mode: box
+    price:
+      name: 单价 (Unit price)
+      description: >-
+        Price per litre from the receipt. Without it, the provincial retail
+        price on that day is used when a province is set in the options.
+      example: 9.38
+      selector:
+        number:
+          min: 0.01
+          max: 50
+          step: 0.01
+          unit_of_measurement: 元/L
+          mode: box
 
 delete_refuel:
   name: 删除加油记录 (Delete refuel record)

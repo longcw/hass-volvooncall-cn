@@ -25,6 +25,13 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 
 from .store import VolvoStore, CHARGE_LIMIT_DISABLED
+from .fuel_price import (
+    CONF_FUEL_GRADE,
+    CONF_FUEL_PRICE_PROVINCE,
+    DEFAULT_GRADE,
+    PROVINCES,
+    async_fetch_price_history,
+)
 from homeassistant.util import dt as dt_util
 from .volvooncall_base import DEFAULT_SCAN_INTERVAL
 from .volvooncall_cn import VehicleAPI
@@ -71,6 +78,11 @@ ATTR_LITERS = "liters"
 ATTR_ODOMETER = "odometer"
 ATTR_RECORD_ID = "record_id"
 ATTR_AT = "at"
+ATTR_FUEL_BEFORE = "fuel_before"
+ATTR_PRICE = "price"
+
+# How often to retry a price lookup while some fill-up is still unpriced.
+FUEL_PRICE_RETRY = timedelta(hours=6)
 
 
 def _read_card_version(filename: str) -> str:
@@ -179,6 +191,8 @@ async def _async_register_refuel_services(hass: HomeAssistant) -> None:
             call.data[ATTR_LITERS],
             odometer,
             _resolve_when(call.data.get(ATTR_AT)) or dt_util.now(),
+            fuel_before=call.data.get(ATTR_FUEL_BEFORE),
+            price=call.data.get(ATTR_PRICE),
         )
         if record is None:
             raise ServiceValidationError("Refuel litres must be greater than 0")
@@ -191,6 +205,8 @@ async def _async_register_refuel_services(hass: HomeAssistant) -> None:
             liters=call.data.get(ATTR_LITERS),
             odometer=call.data.get(ATTR_ODOMETER),
             when=_resolve_when(call.data.get(ATTR_AT)),
+            fuel_before=call.data.get(ATTR_FUEL_BEFORE),
+            price=call.data.get(ATTR_PRICE),
         )
         if not updated:
             raise ServiceValidationError(
@@ -215,6 +231,8 @@ async def _async_register_refuel_services(hass: HomeAssistant) -> None:
             vol.Required(ATTR_LITERS): vol.Coerce(float),
             vol.Optional(ATTR_ODOMETER): vol.Coerce(float),
             vol.Optional(ATTR_AT): cv.datetime,
+            vol.Optional(ATTR_FUEL_BEFORE): vol.Coerce(float),
+            vol.Optional(ATTR_PRICE): vol.Coerce(float),
         }),
     )
     hass.services.async_register(
@@ -227,6 +245,8 @@ async def _async_register_refuel_services(hass: HomeAssistant) -> None:
             vol.Optional(ATTR_LITERS): vol.Coerce(float),
             vol.Optional(ATTR_ODOMETER): vol.Coerce(float),
             vol.Optional(ATTR_AT): cv.datetime,
+            vol.Optional(ATTR_FUEL_BEFORE): vol.Coerce(float),
+            vol.Optional(ATTR_PRICE): vol.Coerce(float),
         }),
     )
     hass.services.async_register(
@@ -272,6 +292,7 @@ async def async_update_options(hass: HomeAssistant, config_entry: ConfigEntry):
         coordinator = hass.data[DOMAIN][entry_id]
         coordinator.volvo_api = volvo_api
         coordinator.update_interval = timedelta(seconds=interval)
+        coordinator.set_fuel_price_options(config_data)
 
 
 async def async_setup_entry(hass, entry):
@@ -284,6 +305,7 @@ async def async_setup_entry(hass, entry):
     volvo_api = VehicleAPI(session=session, username=username, password=password)
     hass.data.setdefault(DOMAIN, {})
     coordinator = hass.data[DOMAIN][entry.entry_id] = VolvoCoordinator(hass, volvo_api, interval)
+    coordinator.set_fuel_price_options({**entry.data, **entry.options})
 
     # Fetch initial data so we have data when entities subscribe
     #
@@ -322,6 +344,36 @@ class VolvoCoordinator(DataUpdateCoordinator):
         # Connection health tracking
         self._consecutive_failures = 0
         self._last_failure_reason = None
+        self.fuel_price_province = None
+        self.fuel_grade = DEFAULT_GRADE
+        self._fuel_price_tried_at = None
+
+    def set_fuel_price_options(self, config_data) -> None:
+        self.fuel_price_province = config_data.get(CONF_FUEL_PRICE_PROVINCE) or None
+        self.fuel_grade = config_data.get(CONF_FUEL_GRADE) or DEFAULT_GRADE
+        self._fuel_price_tried_at = None
+
+    async def _price_refuels(self, stores, now) -> None:
+        """Price unpriced fill-ups from the provincial retail price; retry a failed lookup every few hours."""
+        if self.fuel_price_province not in PROVINCES:
+            return
+        pending = [store for store in stores if store.needs_refuel_prices()]
+        if not pending:
+            return
+        tried = self._fuel_price_tried_at
+        if tried is not None and now - tried < FUEL_PRICE_RETRY:
+            return
+        self._fuel_price_tried_at = now
+        history = await async_fetch_price_history(
+            async_get_clientsession(self.hass),
+            self.fuel_price_province,
+            self.fuel_grade,
+        )
+        changed = False
+        for store in pending:
+            changed = await store.apply_refuel_prices(history) or changed
+        if changed:
+            self.async_update_listeners()
 
 
     async def _seed_odometer_from_stats(self, statistic_id):
@@ -528,6 +580,7 @@ class VolvoCoordinator(DataUpdateCoordinator):
                         )
                         if logged:
                             _LOGGER.info("Refuel detected for %s", vin)
+                            self._fuel_price_tried_at = None
                     except Exception as err:
                         _LOGGER.warning("Refuel detection failed for %s: %s", vin, err)
 
@@ -570,6 +623,11 @@ class VolvoCoordinator(DataUpdateCoordinator):
                 # Track successful update
                 self._consecutive_failures = 0
                 self.store_datas = store_datas
+                # off the poll: the price page can be slow and must not hold it up
+                self.hass.async_create_background_task(
+                    self._price_refuels(store_datas, dt_util.now()),
+                    "volvooncall_cn refuel prices",
+                )
                 return vehicles
                 
         except Exception as err:

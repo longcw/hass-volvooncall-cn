@@ -157,7 +157,7 @@ class VolvoStatSensor(VolvoEntity, SensorEntity):
 class VolvoRefuelSensor(VolvoEntity, SensorEntity):
     """Measured fuel consumption for the last tank, from the refuel log.
 
-    State is the newest tank-to-tank L/100km figure; the log itself rides along
+    State is the newest per-tank L/100km figure; the log itself rides along
     as the ``records`` attribute, which is what the car card's 加油记录 dialog
     lists and edits."""
 
@@ -175,6 +175,8 @@ class VolvoRefuelSensor(VolvoEntity, SensorEntity):
         self._attr_state_class = metaMap[self.metaMapKey]["state_class"]
         self._attr_extra_state_attributes = {
             "average": stats["average"],
+            "last_cost_per_100km": stats["last_cost_per_100km"],
+            "average_cost_per_100km": stats["average_cost_per_100km"],
             "record_count": stats["count"],
             "last_refuel_at": newest.get("at"),
             "last_refuel_liters": newest.get("liters"),

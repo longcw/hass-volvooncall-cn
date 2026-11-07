@@ -11,6 +11,20 @@
             }
         }
     },
+    "options": {
+        "step": {
+            "user": {
+                "description": "Volvo On Call 选项",
+                "data": {
+                    "username": "手机号(11位数字)",
+                    "password": "密码",
+                    "scan_interval": "扫描间隔(单位秒)",
+                    "fuel_price_province": "油价省份（用于计算加油费用）",
+                    "fuel_grade": "油品标号"
+                }
+            }
+        }
+    },
     "entity": {
         "binary_sensor": {
             "tail_gate_open": {

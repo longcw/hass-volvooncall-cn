@@ -9,6 +9,22 @@ from .volvooncall_base import VolvoAPIError
 from .volvooncall_base import DEFAULT_SCAN_INTERVAL
 from .volvooncall_cn import VehicleAPI
 from .volvooncall_cn import DOMAIN
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
+from .fuel_price import (
+    CONF_FUEL_GRADE,
+    CONF_FUEL_PRICE_PROVINCE,
+    DEFAULT_GRADE,
+    GRADES,
+    PROVINCES,
+)
+
+# sentinel option: a select cannot offer an empty value
+FUEL_PRICE_OFF = "off"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,8 +104,12 @@ class VolvoOnCallCnOptionsFlow(config_entries.OptionsFlow):
         username = user_input.get(CONF_USERNAME, vol.UNDEFINED)
         password = user_input.get(CONF_PASSWORD, vol.UNDEFINED)
         scan_interval = user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        province = user_input.get(CONF_FUEL_PRICE_PROVINCE) or FUEL_PRICE_OFF
+        grade = user_input.get(CONF_FUEL_GRADE) or DEFAULT_GRADE
         errors = {}
         if init_done:
+            if province == FUEL_PRICE_OFF:
+                user_input = {**user_input, CONF_FUEL_PRICE_PROVINCE: ""}
             errors = await volvo_validation(self.hass, username, password)
             if not errors:
                 return self.async_create_entry(title=username, data=user_input)
@@ -98,5 +118,18 @@ class VolvoOnCallCnOptionsFlow(config_entries.OptionsFlow):
             vol.Required(CONF_USERNAME, default=username): str,
             vol.Required(CONF_PASSWORD, default=password): str,
             vol.Optional(CONF_SCAN_INTERVAL, default=scan_interval): vol.All(vol.Coerce(int), vol.Range(min=5)),
+            vol.Optional(CONF_FUEL_PRICE_PROVINCE, default=province): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=FUEL_PRICE_OFF, label="关闭 (Off)")]
+                    + [SelectOptionDict(value=name, label=name) for name in PROVINCES],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(CONF_FUEL_GRADE, default=grade): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=g, label=f"{g}#") for g in GRADES],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
         })
         return self.async_show_form(step_id="user", data_schema=config_schema, errors=errors)

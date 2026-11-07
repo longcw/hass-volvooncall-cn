@@ -11,6 +11,20 @@
             }
         }
     },
+    "options": {
+        "step": {
+            "user": {
+                "description": "Volvo On Call options",
+                "data": {
+                    "username": "Username",
+                    "password": "Password",
+                    "scan_interval": "Scan Interval(s)",
+                    "fuel_price_province": "Fuel price province",
+                    "fuel_grade": "Fuel grade"
+                }
+            }
+        }
+    },
     "entity": {
         "binary_sensor": {
             "tail_gate_open": {

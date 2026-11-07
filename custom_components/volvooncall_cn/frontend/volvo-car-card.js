@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.9.1";
+const CARD_VERSION = "2.10.0";
 
 // The API reports the tank in litres and never its size, so the fuel bar needs
 // a capacity to divide by. 71 L covers the XC60/XC90/S90 petrol range; override
@@ -283,6 +283,8 @@ class VolvoCarCard extends HTMLElement {
           attrs.record_count || "",
           attrs.last_refuel_at || "",
           attrs.average || "",
+          // a looked-up price lands after the record exists
+          attrs.average_cost_per_100km || "",
         ].join(":");
       })
       .join("|");
@@ -668,27 +670,53 @@ class VolvoCarCard extends HTMLElement {
     return odometer ? `${when} · ${odometer}` : when;
   }
 
+  _refuelFill(record) {
+    // what this fill did: tank level before → after, unit price, total paid
+    const before = this._refuelNumber(record.fuel_before, 1);
+    const after = this._refuelNumber(record.level_after, 1);
+    const parts = [before && after ? `油量 ${before} → ${after} L` : ""];
+    const price = this._refuelNumber(record.price, 2);
+    if (price) parts.push(`${price} 元/L${record.price_source === "auto" ? "（参考价）" : ""}`);
+    const cost = this._refuelNumber(record.cost, 0);
+    if (cost) parts.push(`¥${cost}`);
+    return parts.filter(Boolean).join(" · ");
+  }
+
   _refuelDetail(record) {
+    // the tank since the previous fill: distance, fuel burned, L/100km, cost
     const consumption = this._refuelNumber(record.consumption, 1, " L/100km");
     const distance = this._refuelNumber(record.distance, 0, " km");
-    if (consumption) return `${consumption} · 本箱 ${distance}`;
-    if (record.source === "manual") return "手动记录 · 等待下次加油计算";
+    if (consumption) {
+      const used = this._refuelNumber(record.fuel_used, 1);
+      const cost = this._refuelNumber(record.cost_per_100km, 1);
+      return [`本箱 ${distance}`, used ? `用油 ${used} L` : "", consumption, cost ? `¥${cost}/100km` : ""]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    if (record.source === "manual" && !distance) return "手动记录 · 等待下次加油计算";
     return distance ? `本箱 ${distance} · 数据不足` : "首次记录 · 等待下次加油计算";
   }
 
-  _refuelDialog() {
+  _refuelSummaryHtml() {
     const attrs = this._state("fuel_measured")?.attributes || {};
     const average = this._refuelNumber(attrs.average, 1, " L/100km") || "—";
+    const cost = this._refuelNumber(attrs.last_cost_per_100km, 1);
+    const averageCost = this._refuelNumber(attrs.average_cost_per_100km, 1);
+    return `
+      <div><span>上次油耗</span><strong>${this._escape(this._refuelHeadline())}</strong></div>
+      <div><span>平均油耗</span><strong>${this._escape(average)}</strong></div>
+      <div><span>上次油费/百公里</span><strong>${this._escape(cost ? `¥${cost}` : "—")}</strong></div>
+      <div><span>平均油费/百公里</span><strong>${this._escape(averageCost ? `¥${averageCost}` : "—")}</strong></div>`;
+  }
+
+  _refuelDialog() {
     return `
       <dialog class="detail-dialog refuel-dialog" data-dialog="refuel">
         <div class="detail-head">
           <div><ha-icon icon="mdi:gas-station"></ha-icon><span>加油记录</span></div>
           <button class="detail-close" aria-label="关闭"><ha-icon icon="mdi:close"></ha-icon></button>
         </div>
-        <div class="refuel-summary">
-          <div><span>上次油耗</span><strong>${this._escape(this._refuelHeadline())}</strong></div>
-          <div><span>平均油耗</span><strong>${this._escape(average)}</strong></div>
-        </div>
+        <div class="refuel-summary">${this._refuelSummaryHtml()}</div>
         <div class="refuel-list">${this._refuelListHtml()}</div>
         <div class="refuel-status" role="status" aria-live="polite"></div>
         <div class="refuel-foot">${this._refuelFootHtml()}</div>
@@ -722,7 +750,7 @@ class VolvoCarCard extends HTMLElement {
     return `${date}T${pad(base.getHours())}:${pad(base.getMinutes())}:${pad(base.getSeconds())}`;
   }
 
-  _refuelFormHtml({ at, odometer, liters }, saveAttribute, saveValue) {
+  _refuelFormHtml({ at, odometer, liters, fuel_before, price }, saveAttribute, saveValue) {
     return `
       <div class="refuel-form">
         <label><span>日期</span>
@@ -736,6 +764,14 @@ class VolvoCarCard extends HTMLElement {
           <input class="refuel-input" type="number" inputmode="decimal" step="0.01" min="0.1"
                  value="${this._escape(this._refuelNumber(liters, 2))}" placeholder="L" />
         </label>
+        <label><span>加油前</span>
+          <input class="refuel-before" type="number" inputmode="decimal" step="0.1" min="0"
+                 value="${this._escape(this._refuelNumber(fuel_before, 1))}" placeholder="油箱剩余 L（可选）" />
+        </label>
+        <label><span>单价</span>
+          <input class="refuel-price" type="number" inputmode="decimal" step="0.01" min="0.01"
+                 value="${this._escape(this._refuelNumber(price, 2))}" placeholder="元/L（留空用当日油价）" />
+        </label>
         <div class="refuel-form-actions">
           <button class="refuel-ok" data-${saveAttribute}="${this._escape(saveValue)}" ${this._refuelBusy ? "disabled" : ""}>保存</button>
           <button class="refuel-no" data-refuel-cancel="1" ${this._refuelBusy ? "disabled" : ""}>取消</button>
@@ -746,6 +782,7 @@ class VolvoCarCard extends HTMLElement {
   _refuelRowHtml(record) {
     const id = String(record.id ?? "");
     const liters = this._refuelNumber(record.liters, 2);
+    const fill = this._refuelFill(record);
     if (this._refuelEditing === id) {
       return `
         <div class="refuel-item editing">
@@ -760,6 +797,7 @@ class VolvoCarCard extends HTMLElement {
       <div class="refuel-item">
         <div class="refuel-main">
           <span class="refuel-when">${this._escape(this._refuelWhen(record))}</span>
+          ${fill ? `<span class="refuel-calc">${this._escape(fill)}</span>` : ""}
           <span class="refuel-calc">${this._escape(this._refuelDetail(record))}</span>
         </div>
         <div class="refuel-side">
@@ -789,14 +827,20 @@ class VolvoCarCard extends HTMLElement {
           <span class="refuel-hint">可改为过去某次加油</span>
         </div>
         ${this._refuelFormHtml(
-          { at: undefined, odometer: this._stateNumber("odometer"), liters: undefined },
+          {
+            at: undefined,
+            odometer: this._stateNumber("odometer"),
+            liters: undefined,
+            fuel_before: undefined,
+            price: undefined,
+          },
           "refuel-create",
           "1",
         )}
       </div>`;
   }
 
-  _refuelReadForm(originalAt) {
+  _refuelReadForm(original = {}) {
     const dialog = this.shadowRoot?.querySelector(".refuel-dialog");
     if (!dialog) return null;
     const liters = Number.parseFloat(dialog.querySelector(".refuel-input")?.value);
@@ -814,8 +858,23 @@ class VolvoCarCard extends HTMLElement {
       }
       data.odometer = odometer;
     }
+    // send these only when changed, so saving an untouched looked-up price
+    // does not pin it as one typed from a receipt
+    for (const [selector, key, digits, label, minimum] of [
+      [".refuel-before", "fuel_before", 1, "加油前油量", 0],
+      [".refuel-price", "price", 2, "单价", 0.01],
+    ]) {
+      const raw = dialog.querySelector(selector)?.value;
+      if (!raw || raw === this._refuelNumber(original[key], digits)) continue;
+      const value = Number.parseFloat(raw);
+      if (!Number.isFinite(value) || value < minimum) {
+        this._setRefuelStatus(`请输入有效的${label}`, "error");
+        return null;
+      }
+      data[key] = value;
+    }
     const date = dialog.querySelector(".refuel-date")?.value;
-    if (date) data.at = this._composeAt(date, originalAt);
+    if (date) data.at = this._composeAt(date, original.at);
     return data;
   }
 
@@ -963,7 +1022,7 @@ class VolvoCarCard extends HTMLElement {
     on("[data-refuel-save]", (element) => {
       const id = element.dataset.refuelSave;
       const original = this._refuelRecords().find((record) => String(record.id) === id);
-      const data = this._refuelReadForm(original?.at);
+      const data = this._refuelReadForm(original);
       if (!data) return;
       this._callRefuel("update_refuel", { record_id: id, ...data }, "记录已更新");
     });
@@ -985,10 +1044,8 @@ class VolvoCarCard extends HTMLElement {
   _refreshRefuelDialog() {
     const dialog = this.shadowRoot?.querySelector(".refuel-dialog");
     if (!dialog) return;
-    const attrs = this._state("fuel_measured")?.attributes || {};
-    const summary = dialog.querySelectorAll(".refuel-summary strong");
-    if (summary[0]) summary[0].textContent = this._refuelHeadline();
-    if (summary[1]) summary[1].textContent = this._refuelNumber(attrs.average, 1, " L/100km") || "—";
+    const summary = dialog.querySelector(".refuel-summary");
+    if (summary) summary.innerHTML = this._refuelSummaryHtml();
     const list = dialog.querySelector(".refuel-list");
     if (list) list.innerHTML = this._refuelListHtml();
     const foot = dialog.querySelector(".refuel-foot");
